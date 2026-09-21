@@ -1,0 +1,35 @@
+{
+	"schemaVersion": 1,
+	"id": "addurdisc",
+	"version": "${version}",
+	"name": "AddurDisc",
+	"description": "Now you can add your discs!",
+	"authors": [
+		"TuYw"
+	],
+	"contact": {
+		"homepage": "https://www.mcmod.cn/class/15072.html",
+		"sources": "https://github.com/TunYuntuwuQWQ/addurdisc",
+		"issues": "https://github.com/TunYuntuwuQWQ/addurdisc/issues"
+	},
+	"license": "MIT",
+	"icon": "assets/addurdisc/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"nya.tuyw.addurdisc.AddurDisc"
+		]
+	},
+	"mixins": [
+		"addurdisc.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.19.4",
+		"minecraft": "~26.2",
+		"java": ">=25",
+		"fabric-api": "*"
+	},
+	"suggests": {
+		"another-mod": "*"
+	}
+}
