@@ -10,6 +10,7 @@ import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.phys.AABB;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import nya.tuyw.addurdisc.AddurDisc;
+import nya.tuyw.addurdisc.disc.DiscProtocol;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.PlaySong;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
@@ -28,8 +29,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(net.minecraft.world.item.JukeboxSongPlayer.class)
 public class JukeboxSongPlayerMixin {
-    /** How far around the jukebox the playback is announced, matching a record's own carrying range. */
-    private static final double ANNOUNCE_RANGE = 64.0;
+    /**
+     * How far around the jukebox players are told to play. Wider than the track's own carrying
+     * range, which the generated sounds.json pins at {@code DiscProtocol.AUDIBLE_BLOCKS}, so that
+     * someone walking towards a playing jukebox already has the sound and simply fades in.
+     */
+    private static final double ANNOUNCE_RANGE = DiscProtocol.ANNOUNCE_BLOCKS;
 
     @Shadow
     @Final

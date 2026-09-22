@@ -1,134 +1,126 @@
 package nya.tuyw.addurdisc.init;
 
 import nya.tuyw.addurdisc.AddurDisc;
-import nya.tuyw.addurdisc.Config.ConfigUtil;
+import nya.tuyw.addurdisc.config.ConfigUtil;
 
-import java.io.ByteArrayInputStream;
-import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 /**
  * Owns everything that lives inside the generated resource folder: which track names are legal,
- * which tracks are currently on disk, and the pack files describing them.
+ * which tracks are currently on disk, and the {@code pack.mcmeta} and {@code sounds.json} that
+ * describe them.
  *
- * <p>Bootstrapping ({@link ModInitialize}) and a runtime import both go through here, the only
- * difference being that a runtime import cannot register anything and therefore only refreshes the
- * files, which the game then picks up through a resource reload.</p>
+ * <p>Tracks are the only thing generated per song. The disc item, its model and its artwork ship
+ * with the mod, so an imported track adds sound data and nothing else.</p>
  */
 public final class DiscResources {
+    private static final String OG = ".ogg";
     /**
      * Lower case, no separators other than dot / dash / underscore, and never starting with a dot
      * so an imported file can not hide itself or escape the sounds folder.
      */
     private static final Pattern SOUND_NAME = Pattern.compile("^[a-z0-9][a-z0-9._-]{0,63}$");
 
+    /** The client and the integrated server rewrite the same two files. */
+    private static final ReentrantLock WRITE_LOCK = new ReentrantLock();
+
+    public static Path root() {
+        return ConfigUtil.getResourcePath();
+    }
+
+    public static Path soundDir() {
+        return root().resolve("assets/addurdisc/sounds");
+    }
+
     public static boolean isValidName(String name) {
         return name != null && SOUND_NAME.matcher(name).matches();
+    }
+
+    /** Creates the folder layout and writes both pack files for whatever is already on disk. */
+    public static void bootstrap() {
+        try {
+            Files.createDirectories(soundDir());
+        } catch (IOException e) {
+            AddurDisc.LOGGER.error("Could not create the music folder at {}", root(), e);
+            return;
+        }
+        WRITE_LOCK.lock();
+        try {
+            Generator.writePackMcmeta(root());
+            Generator.writeSoundsJson(root().resolve("assets/addurdisc/sounds.json"), scanSoundNames());
+        } finally {
+            WRITE_LOCK.unlock();
+        }
+    }
+
+    /**
+     * Makes sure the folder still looks like a pack, which is what the resource repository needs to
+     * read it. The metadata only ever changes with the game, so a rewrite is a last resort.
+     */
+    public static void ensurePackMetadata() {
+        Path packRoot = root();
+        if (Files.isRegularFile(packRoot.resolve("pack.mcmeta"))) {
+            return;
+        }
+        WRITE_LOCK.lock();
+        try {
+            Files.createDirectories(soundDir());
+            Generator.writePackMcmeta(packRoot);
+        } catch (IOException e) {
+            AddurDisc.LOGGER.error("Could not create the music folder at {}", packRoot, e);
+        } finally {
+            WRITE_LOCK.unlock();
+        }
     }
 
     /** @return every usable track name (file name without the .ogg extension), sorted. */
     public static ArrayList<String> scanSoundNames() {
         ArrayList<String> names = new ArrayList<>();
-        File[] files = ModInitialize.sounds.toFile().listFiles();
-        if (files == null) {
+        Path dir = soundDir();
+        if (!Files.isDirectory(dir)) {
             return names;
         }
-        for (File file : files) {
-            if (!file.getName().endsWith(".ogg")) {
-                AddurDisc.LOGGER.debug("{} is not a sound file, ignoring.", file.getName());
-                continue;
+        try (Stream<Path> files = Files.list(dir)) {
+            List<Path> sorted = files.filter(Files::isRegularFile).sorted().toList();
+            for (Path file : sorted) {
+                String fileName = file.getFileName().toString();
+                if (!fileName.endsWith(OG)) {
+                    continue;
+                }
+                String name = fileName.substring(0, fileName.length() - OG.length());
+                if (isValidName(name)) {
+                    names.add(name);
+                } else {
+                    AddurDisc.LOGGER.warn("{} contains illegal characters. Ignoring.", fileName);
+                }
             }
-            String name = file.getName().substring(0, file.getName().length() - ".ogg".length());
-            if (isValidName(name)) {
-                names.add(name);
-            } else {
-                AddurDisc.LOGGER.warn("{} contains illegal characters. Ignoring.", file.getName());
-            }
+        } catch (IOException e) {
+            AddurDisc.LOGGER.error("Could not list {}", dir, e);
         }
-        names.sort(String::compareTo);
         return names;
     }
 
-    /** Rewrites the generated pack so it describes exactly the tracks that are on disk. */
-    public static void writePackFiles(List<String> names) {
-        Generater.GenSoundsjson(ModInitialize.path, names);
-        writeTextures(names);
-        Generater.GenModelsjson(ModInitialize.models, ModInitialize.itemDefinitions, names);
-        if (ConfigUtil.getrefreshlang()) {
-            Generater.GenLangjson(ModInitialize.lang, names);
-        } else {
-            AddurDisc.LOGGER.debug("refreshLang:false, will not refresh the en_us.json");
-        }
-        Path selected = tagsTarget();
-        File other = selected.getFileName().toString().equals("music_discs.json")
-                ? ModInitialize.data.resolve("creeper_drop_music_discs.json").toFile()
-                : ModInitialize.data.resolve("music_discs.json").toFile();
-        if (other.exists() && !other.delete()) {
-            AddurDisc.LOGGER.warn("Could not remove the stale tag file {}", other.getName());
-        }
-        Generater.GenItemTags(selected, names);
-    }
-
-    private static Path tagsTarget() {
-        return ConfigUtil.getDropbycreeper()
-                ? ModInitialize.data.resolve("creeper_drop_music_discs.json")
-                : ModInitialize.data.resolve("music_discs.json");
-    }
-
-    /** The artwork new disc textures are stamped from, read once and kept in memory. */
-    private static byte[] discArtwork;
-
     /**
-     * Writes the disc artwork of every track that has none yet.
-     *
-     * <p>{@link ModInitialize#Stream} is spent once bootstrapping has read it, and an exhausted
-     * stream decodes to no image at all, so each call gets a stream of its own over the bytes that
-     * were read the first time.</p>
-     */
-    private static void writeTextures(List<String> names) {
-        if (discArtwork == null) {
-            discArtwork = readArtwork();
-        }
-        if (discArtwork.length == 0) {
-            return;
-        }
-        try {
-            Generater.GenTexturepng(new ByteArrayInputStream(discArtwork), ModInitialize.textures, names);
-        } catch (RuntimeException e) {
-            AddurDisc.LOGGER.warn("Could not write the disc artwork.", e);
-        }
-    }
-
-    private static byte[] readArtwork() {
-        try (InputStream artwork = DiscResources.class.getResourceAsStream("/custom.png")) {
-            if (artwork == null) {
-                AddurDisc.LOGGER.warn("custom.png is missing, imported tracks get no artwork.");
-                return new byte[0];
-            }
-            return artwork.readAllBytes();
-        } catch (IOException e) {
-            AddurDisc.LOGGER.warn("Could not read custom.png, imported tracks get no artwork.", e);
-            return new byte[0];
-        }
-    }
-
-    /**
-     * Refreshes the generated files after an import. The other half of the job is on the client,
-     * which has to reload its resources before the new track can be heard.
+     * Rewrites {@code sounds.json} so it describes exactly the tracks that are on disk.
      *
      * <p>A failure is only logged: the track itself is already on disk, and the answer an importing
      * client is waiting for must not depend on these generated files.</p>
      */
     public static void refresh() {
+        WRITE_LOCK.lock();
         try {
-            writePackFiles(scanSoundNames());
+            Generator.writeSoundsJson(root().resolve("assets/addurdisc/sounds.json"), scanSoundNames());
         } catch (RuntimeException e) {
             AddurDisc.LOGGER.error("Could not refresh the generated disc files.", e);
+        } finally {
+            WRITE_LOCK.unlock();
         }
     }
 

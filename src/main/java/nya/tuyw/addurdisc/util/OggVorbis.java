@@ -2,9 +2,12 @@ package nya.tuyw.addurdisc.util;
 
 import nya.tuyw.addurdisc.AddurDisc;
 
-import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.channels.FileChannel;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 
 /**
  * Minimal Ogg Vorbis header reader.
@@ -13,6 +16,10 @@ import java.nio.file.Files;
  * track is, so AddurDisc needs the length of every user supplied .ogg file. Only two pieces of
  * information are required, both of which live in the container itself: the sample rate from the
  * identification header and the absolute sample count of the last page (its granule position).</p>
+ *
+ * <p>Both are read straight from the channel. A track is up to tens of megabytes and the length of
+ * every one of them is asked for whenever the library is listed, so the old habit of loading whole
+ * files into memory showed up as a stutter on join rather than as a bug.</p>
  */
 public final class OggVorbis {
     private OggVorbis() {
@@ -20,106 +27,148 @@ public final class OggVorbis {
 
     private static final int PAGE_HEADER_SIZE = 27;
     private static final int GRANULE_POSITION_OFFSET = 6;
+    private static final int SEGMENT_COUNT_OFFSET = 26;
     private static final int SAMPLE_RATE_OFFSET_IN_ID_HEADER = 12;
+    /** Format version this reader understands; anything else is not a page we can trust. */
+    private static final byte OGG_VERSION = 0;
+    /** First page of a Vorbis stream, which is where the identification header lives. */
+    private static final int HEAD_WINDOW = 4096;
+    /**
+     * Enough of the tail to hold the last few pages. A page is capped at 65535 bytes of payload by
+     * its own segment table, so one window covers several pages of back tracking.
+     */
+    private static final int TAIL_WINDOW = 256 * 1024;
 
     /**
      * @return the duration of the file in seconds, or {@code fallbackSeconds} when the file is not
      * a readable Ogg Vorbis stream.
      */
-    public static float readDurationSeconds(File file, float fallbackSeconds) {
-        try {
-            byte[] data = Files.readAllBytes(file.toPath());
-
-            long sampleRate = readSampleRate(data);
+    public static float readDurationSeconds(Path file, float fallbackSeconds) {
+        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
+            long fileSize = channel.size();
+            if (fileSize < PAGE_HEADER_SIZE) {
+                return fallbackSeconds;
+            }
+            long sampleRate = readSampleRate(channel, fileSize);
             if (sampleRate <= 0L) {
                 AddurDisc.LOGGER.warn("{} is not an Ogg Vorbis file (no identification header), using {} seconds",
-                        file.getName(), fallbackSeconds);
+                        file.getFileName(), fallbackSeconds);
                 return fallbackSeconds;
             }
-
-            long samples = readLastGranulePosition(data);
+            long samples = readLastGranulePosition(channel, fileSize);
             if (samples <= 0L) {
                 AddurDisc.LOGGER.warn("Could not determine the length of {}, using {} seconds",
-                        file.getName(), fallbackSeconds);
+                        file.getFileName(), fallbackSeconds);
                 return fallbackSeconds;
             }
-
             return samples / (float) sampleRate;
         } catch (IOException e) {
-            AddurDisc.LOGGER.warn("Could not read {}, using {} seconds", file.getName(), fallbackSeconds, e);
+            AddurDisc.LOGGER.warn("Could not read {}, using {} seconds", file.getFileName(), fallbackSeconds, e);
             return fallbackSeconds;
         }
     }
 
-    private static long readSampleRate(byte[] data) {
-        int page = indexOf(data, "OggS", 0);
-        if (page < 0 || page + PAGE_HEADER_SIZE > data.length) {
+    private static long readSampleRate(FileChannel channel, long fileSize) throws IOException {
+        ByteBuffer head = readAt(channel, 0, (int) Math.min(fileSize, HEAD_WINDOW));
+        if (pageLength(head, 0) < 0) {
             return -1L;
         }
-
-        // The first page of a Vorbis stream always carries the identification header packet.
-        int segments = data[page + 26] & 0xFF;
-        int packet = page + PAGE_HEADER_SIZE + segments;
-        if (packet + 16 > data.length || data[packet] != 1 || !matches(data, packet + 1, "vorbis")) {
+        int segments = head.get(SEGMENT_COUNT_OFFSET) & 0xFF;
+        int packet = PAGE_HEADER_SIZE + segments;
+        if (packet + 16 > head.limit() || head.get(packet) != 1 || !matches(head, packet + 1, "vorbis")) {
             return -1L;
         }
-
-        return readUnsignedIntLE(data, packet + SAMPLE_RATE_OFFSET_IN_ID_HEADER);
+        return readUnsignedIntLE(head, packet + SAMPLE_RATE_OFFSET_IN_ID_HEADER);
     }
 
-    private static long readLastGranulePosition(byte[] data) {
-        for (int i = data.length - PAGE_HEADER_SIZE; i >= 0; i--) {
-            if (data[i] == 'O' && data[i + 1] == 'g' && data[i + 2] == 'g' && data[i + 3] == 'S') {
-                long granule = readLongLE(data, i + GRANULE_POSITION_OFFSET);
-                // -1 marks a page on which no packet finished; keep looking further back.
-                if (granule >= 0L) {
-                    return granule;
-                }
+    /**
+     * Walks the page chain backwards from the end of the file.
+     *
+     * <p>Guessing at the last {@code "OggS"} bytes would happily land on a run of compressed audio
+     * that happens to spell the capture pattern, so a candidate is only accepted once its own stated
+     * length lands exactly where the previous page was found to end. That chain has to reach the
+     * file's end, which a random byte sequence will not.</p>
+     */
+    private static long readLastGranulePosition(FileChannel channel, long fileSize) throws IOException {
+        int window = (int) Math.min(fileSize, TAIL_WINDOW);
+        long windowStart = fileSize - window;
+        ByteBuffer tail = readAt(channel, windowStart, window);
+        // Chained from the end: a page counts only once its own length lands exactly on the start of
+        // the page before it, and the first of those to carry a real granule is the last one.
+        long expectedEnd = tail.limit();
+        for (int i = tail.limit() - PAGE_HEADER_SIZE; i >= 0; i--) {
+            int pageLength = pageLength(tail, i);
+            if (pageLength < 0 || i + pageLength != expectedEnd) {
+                continue;
+            }
+            expectedEnd = i;
+            long granule = readLongLE(tail, i + GRANULE_POSITION_OFFSET);
+            // -1 marks a page on which no packet finished; step further back.
+            if (granule >= 0L) {
+                return granule;
             }
         }
         return -1L;
     }
 
-    private static int indexOf(byte[] data, String needle, int from) {
-        int last = data.length - needle.length();
-        for (int i = Math.max(from, 0); i <= last; i++) {
-            if (matches(data, i, needle)) {
-                return i;
-            }
+    /**
+     * @return the total length of the page starting at {@code offset}, or -1 when there is no
+     * well formed page header there
+     */
+    private static int pageLength(ByteBuffer data, int offset) {
+        if (offset < 0 || offset + PAGE_HEADER_SIZE > data.limit()
+                || !matches(data, offset, "OggS") || data.get(offset + 4) != OGG_VERSION) {
+            return -1;
         }
-        return -1;
+        int segments = data.get(offset + SEGMENT_COUNT_OFFSET) & 0xFF;
+        int headerWithSegments = PAGE_HEADER_SIZE + segments;
+        if (offset + headerWithSegments > data.limit()) {
+            return -1;
+        }
+        int payload = 0;
+        for (int i = 0; i < segments; i++) {
+            payload += data.get(offset + PAGE_HEADER_SIZE + i) & 0xFF;
+        }
+        return headerWithSegments + payload;
     }
 
-    private static boolean matches(byte[] data, int offset, String ascii) {
-        if (offset < 0 || offset + ascii.length() > data.length) {
+    private static ByteBuffer readAt(FileChannel channel, long position, int length) throws IOException {
+        ByteBuffer buffer = ByteBuffer.allocate(length).order(ByteOrder.LITTLE_ENDIAN);
+        long read = 0;
+        while (read < length) {
+            int step = channel.read(buffer, position + read);
+            if (step < 0) {
+                break;
+            }
+            read += step;
+        }
+        buffer.flip();
+        return buffer;
+    }
+
+    private static boolean matches(ByteBuffer data, int offset, String ascii) {
+        if (offset < 0 || offset + ascii.length() > data.limit()) {
             return false;
         }
         for (int i = 0; i < ascii.length(); i++) {
-            if (data[offset + i] != (byte) ascii.charAt(i)) {
+            if (data.get(offset + i) != (byte) ascii.charAt(i)) {
                 return false;
             }
         }
         return true;
     }
 
-    private static long readUnsignedIntLE(byte[] data, int offset) {
-        if (offset < 0 || offset + 4 > data.length) {
+    private static long readUnsignedIntLE(ByteBuffer data, int offset) {
+        if (offset < 0 || offset + 4 > data.limit()) {
             return -1L;
         }
-        return (data[offset] & 0xFFL)
-                | ((data[offset + 1] & 0xFFL) << 8)
-                | ((data[offset + 2] & 0xFFL) << 16)
-                | ((data[offset + 3] & 0xFFL) << 24);
+        return data.getInt(offset) & 0xFFFFFFFFL;
     }
 
-    private static long readLongLE(byte[] data, int offset) {
-        if (offset < 0 || offset + 8 > data.length) {
+    private static long readLongLE(ByteBuffer data, int offset) {
+        if (offset < 0 || offset + 8 > data.limit()) {
             return -1L;
         }
-        long value = 0L;
-        for (int i = 7; i >= 0; i--) {
-            value = (value << 8) | (data[offset + i] & 0xFFL);
-        }
-        return value;
+        return data.getLong(offset);
     }
 }

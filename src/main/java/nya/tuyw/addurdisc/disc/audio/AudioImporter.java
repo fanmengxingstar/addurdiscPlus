@@ -1,7 +1,7 @@
 package nya.tuyw.addurdisc.disc.audio;
 
 import nya.tuyw.addurdisc.AddurDisc;
-import nya.tuyw.addurdisc.Config.ConfigUtil;
+import nya.tuyw.addurdisc.config.ConfigUtil;
 import nya.tuyw.addurdisc.init.DiscResources;
 
 import java.io.IOException;
@@ -21,7 +21,6 @@ import java.text.Normalizer;
 public final class AudioImporter {
     /** Raw files are read into memory before conversion, hence the hard cap. */
     public static final long MAX_SOURCE_BYTES = 200L * 1024 * 1024;
-    public static final long MAX_OGG_BYTES = 32L * 1024 * 1024;
     /** libvorbis quality mode; 4 is roughly 128 kbps, transparent enough for a music disc. */
     private static final String VORBIS_QUALITY = "4";
     private static final long TIMEOUT_SECONDS = 180;
@@ -116,8 +115,9 @@ public final class AudioImporter {
             if (ogg.length == 0) {
                 throw new ImportFailedException("ffmpeg produced no audio for " + source.getFileName() + ".");
             }
-            if (ogg.length > MAX_OGG_BYTES) {
-                throw new ImportFailedException(tooLarge(ogg.length, MAX_OGG_BYTES));
+            long maxSongBytes = ConfigUtil.getMaxSongBytes();
+            if (ogg.length > maxSongBytes) {
+                throw new ImportFailedException(tooLarge(ogg.length, maxSongBytes));
             }
             AddurDisc.LOGGER.debug("Converted {} to a {} byte mono ogg.", source.getFileName(), ogg.length);
             return ogg;

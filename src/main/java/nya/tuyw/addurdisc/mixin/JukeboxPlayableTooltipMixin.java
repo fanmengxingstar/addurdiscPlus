@@ -10,6 +10,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.JukeboxPlayable;
 import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.level.Level;
+import nya.tuyw.addurdisc.disc.SongBinding;
 import nya.tuyw.addurdisc.init.ModInitialize;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -34,9 +35,14 @@ public class JukeboxPlayableTooltipMixin {
     private void addurdisc$hidePlaceholderTooltip(Item.TooltipContext context, Consumer<Component> lines,
                                                   TooltipFlag flag, DataComponentGetter components,
                                                   CallbackInfo ci) {
-        if (components.get(ModInitialize.DISC_SONG) != null) {
+        if (isPlayable(components.get(ModInitialize.DISC_SONG))) {
             ci.cancel();
         }
+    }
+
+    /** @return whether a stored binding names a track that can actually be played */
+    private static boolean isPlayable(SongBinding binding) {
+        return binding != null && binding.isBound();
     }
 
     /**
@@ -50,7 +56,7 @@ public class JukeboxPlayableTooltipMixin {
     @Inject(method = "tryInsertIntoJukebox", at = @At("HEAD"), cancellable = true)
     private static void addurdisc$rejectBlankDisc(Level level, BlockPos pos, ItemStack stack, Player player,
                                                   CallbackInfoReturnable<InteractionResult> cir) {
-        if (stack.is(ModInitialize.CUSTOM_DISC) && !stack.has(ModInitialize.DISC_SONG)) {
+        if (stack.is(ModInitialize.CUSTOM_DISC) && !isPlayable(stack.get(ModInitialize.DISC_SONG))) {
             cir.setReturnValue(InteractionResult.TRY_WITH_EMPTY_HAND);
         }
     }

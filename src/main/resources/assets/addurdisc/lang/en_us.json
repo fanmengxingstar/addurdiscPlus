@@ -14,5 +14,13 @@
   "addurdisc.message.denied": "You need operator permission to upload music to this server.",
   "addurdisc.message.sync_started": "Syncing music discs from the server...",
   "addurdisc.message.sync_done": "Music discs synced.",
-  "addurdisc.message.sync_failed": "Failed to sync a music disc from the server."
+  "addurdisc.message.sync_failed": "Failed to sync a music disc from the server.",
+  "addurdisc.pack.generated": "AddurDisc's imported music",
+  "addurdisc.upload.too_large": "That track is bigger than this server accepts.",
+  "addurdisc.upload.no_disc": "Hold the blank disc in the hand you imported with, then try again.",
+  "addurdisc.upload.store_full": "This server's music storage is full.",
+  "addurdisc.upload.too_many_tracks": "This server already holds as many tracks as it allows.",
+  "addurdisc.upload.corrupt": "The converted track arrived damaged. Try importing it again.",
+  "addurdisc.upload.storage_failed": "The server could not store that track.",
+  "addurdisc.upload.busy": "The server is still busy with another upload. Try again in a moment."
 }

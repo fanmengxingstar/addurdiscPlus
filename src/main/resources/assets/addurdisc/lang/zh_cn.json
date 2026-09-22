@@ -14,5 +14,13 @@
   "addurdisc.message.denied": "需要管理员权限才能向该服务器上传音乐。",
   "addurdisc.message.sync_started": "正在从服务器同步音乐文件……",
   "addurdisc.message.sync_done": "音乐唱片同步完成。",
-  "addurdisc.message.sync_failed": "从服务器同步音乐唱片失败。"
+  "addurdisc.message.sync_failed": "从服务器同步音乐唱片失败。",
+  "addurdisc.pack.generated": "AddurDisc 导入的音乐",
+  "addurdisc.upload.too_large": "这首曲子超过了服务器允许的大小。",
+  "addurdisc.upload.no_disc": "请把空白唱片拿在导入时用的那只手上，再试一次。",
+  "addurdisc.upload.store_full": "服务器的音乐存储空间已满。",
+  "addurdisc.upload.too_many_tracks": "服务器的音乐数量已达上限。",
+  "addurdisc.upload.corrupt": "转换后的音频在传输中损坏，请重新导入。",
+  "addurdisc.upload.storage_failed": "服务器无法保存这首曲子。",
+  "addurdisc.upload.busy": "服务器还在处理另一个上传，请稍后再试。"
 }

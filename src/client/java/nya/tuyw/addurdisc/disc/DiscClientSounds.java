@@ -2,13 +2,13 @@ package nya.tuyw.addurdisc.disc;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
+import net.minecraft.client.resources.sounds.SoundInstance;
 import net.minecraft.client.sounds.SoundEngine;
 import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.PreparableReloadListener;
 import net.minecraft.sounds.SoundEvent;
-import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.phys.Vec3;
 import nya.tuyw.addurdisc.AddurDisc;
 import nya.tuyw.addurdisc.disc.net.DiscClientNetwork;
@@ -29,7 +29,11 @@ import java.util.concurrent.Executor;
  * here. A track that is not on this computer yet is fetched and played as soon as it is.</p>
  */
 public final class DiscClientSounds {
-    private static final Map<BlockPos, Identifier> PLAYING = new HashMap<>();
+    /**
+     * The instance, not just the name, because stopping by name and category stops every jukebox
+     * playing that track rather than only the one that went quiet.
+     */
+    private static final Map<BlockPos, SoundInstance> PLAYING = new HashMap<>();
     /** Jukeboxes whose song was announced before this side could hear it. */
     private static final Map<BlockPos, Identifier> WAITING = new HashMap<>();
 
@@ -47,7 +51,8 @@ public final class DiscClientSounds {
             }
         }
         SoundEvent event = SoundEvent.createVariableRangeEvent(sound);
-        SoundEngine.PlayResult result = manager.play(SimpleSoundInstance.forJukeboxSong(event, Vec3.atCenterOf(pos)));
+        SoundInstance instance = SimpleSoundInstance.forJukeboxSong(event, Vec3.atCenterOf(pos));
+        SoundEngine.PlayResult result = manager.play(instance);
         if (result == SoundEngine.PlayResult.NOT_STARTED) {
             AddurDisc.LOGGER.warn("The track {} could not be started on this client.", sound);
             return;
@@ -56,7 +61,7 @@ public final class DiscClientSounds {
             // The track is playing, just under a category this player has turned down.
             AddurDisc.LOGGER.warn("The track {} started on a silenced sound category.", sound);
         }
-        PLAYING.put(pos.immutable(), sound);
+        PLAYING.put(pos.immutable(), instance);
     }
 
     /**
@@ -93,10 +98,10 @@ public final class DiscClientSounds {
     }
 
     public static void stop(BlockPos pos) {
-        Identifier sound = PLAYING.remove(pos.immutable());
         WAITING.remove(pos.immutable());
-        if (sound != null) {
-            Minecraft.getInstance().getSoundManager().stop(sound, SoundSource.RECORDS);
+        SoundInstance instance = PLAYING.remove(pos.immutable());
+        if (instance != null) {
+            Minecraft.getInstance().getSoundManager().stop(instance);
         }
     }
 

@@ -26,7 +26,7 @@ public class JukeboxSongMixin {
     private static void addurdisc$useBoundSong(ItemStack stack,
                                                CallbackInfoReturnable<Optional<Holder<JukeboxSong>>> cir) {
         SongBinding binding = stack.get(ModInitialize.DISC_SONG);
-        if (binding != null) {
+        if (binding != null && binding.isBound()) {
             cir.setReturnValue(Optional.of(binding.asSong()));
         }
     }

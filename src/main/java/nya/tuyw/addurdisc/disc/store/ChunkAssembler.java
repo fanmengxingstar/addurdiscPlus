@@ -21,6 +21,11 @@ public final class ChunkAssembler {
         return name;
     }
 
+    /** @return the size the transfer announced up front, which is what its budget was reserved on */
+    public long expectedBytes() {
+        return expectedBytes;
+    }
+
     /** @return false when the peer sent more bytes than announced, which ends the transfer */
     public boolean accept(byte[] chunk) {
         if (chunk == null || chunk.length == 0) {

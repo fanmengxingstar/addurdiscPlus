@@ -1,49 +1,84 @@
 package nya.tuyw.addurdisc.disc.store;
 
 import nya.tuyw.addurdisc.AddurDisc;
-import nya.tuyw.addurdisc.Config.ConfigUtil;
+import nya.tuyw.addurdisc.config.ConfigUtil;
 import nya.tuyw.addurdisc.init.DiscResources;
-import nya.tuyw.addurdisc.init.ModInitialize;
 import nya.tuyw.addurdisc.util.OggVorbis;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The sounds folder, seen as the single source of truth for the available tracks. Both sides use
  * it: the server writes imported tracks and serves them, a client writes what it downloaded.
+ *
+ * <p>The digest and the length of a track only change when its bytes change, so they are remembered
+ * against the file's size and timestamp. Listing the library happens on every join and on every
+ * import, and hashing every file again each time turned a folder of songs into a stall.</p>
  */
 public final class SongStore {
     private static final String OGG = ".ogg";
     /** Files with this prefix are never treated as tracks, so a half written import is invisible. */
     private static final String TEMP_PREFIX = "_tmp_";
+    private static final int DIGEST_BUFFER = 16 * 1024;
+
+    private static final Map<Path, Cached> INDEX = new ConcurrentHashMap<>();
+
+    private record Cached(long size, long modified, String sha1, float length) {
+    }
 
     /** @return every legal track on disk, sorted by name */
     public static List<SongInfo> scan() {
         List<SongInfo> songs = new ArrayList<>();
+        Set<Path> present = new HashSet<>();
         for (String name : DiscResources.scanSoundNames()) {
             Path file = resolve(name);
-            if (file != null && Files.isRegularFile(file)) {
-                songs.add(describe(name, file));
+            if (file == null || !Files.isRegularFile(file)) {
+                continue;
+            }
+            present.add(file);
+            SongInfo song = describe(name, file);
+            if (song != null) {
+                songs.add(song);
             }
         }
+        INDEX.keySet().retainAll(present);
         return songs;
     }
 
-    public static SongInfo describe(String name, Path file) {
+    /** @return the track, or null when the file disappeared or shrank to nothing mid read */
+    private static SongInfo describe(String name, Path file) {
         long size;
+        long modified;
         try {
             size = Files.size(file);
+            modified = Files.getLastModifiedTime(file).toMillis();
         } catch (IOException e) {
-            size = 0;
+            return null;
         }
-        return new SongInfo(name, size, sha1(file), OggVorbis.readDurationSeconds(file.toFile(), ConfigUtil.getDefaultSongLengthSeconds()));
+        if (size <= 0) {
+            return null;
+        }
+        Cached cached = INDEX.get(file);
+        if (cached != null && cached.size() == size && cached.modified() == modified) {
+            return new SongInfo(name, size, cached.sha1(), cached.length());
+        }
+        String sha1 = sha1(file);
+        float length = OggVorbis.readDurationSeconds(file, ConfigUtil.getDefaultSongLengthSeconds());
+        INDEX.put(file, new Cached(size, modified, sha1, length));
+        return new SongInfo(name, size, sha1, length);
     }
 
     /** @return the track file, or null when the name is not a legal track name */
@@ -52,7 +87,7 @@ public final class SongStore {
             AddurDisc.LOGGER.warn("Rejected the illegal track name {}", name);
             return null;
         }
-        return ModInitialize.sounds.resolve(name + OGG).toAbsolutePath().normalize();
+        return DiscResources.soundDir().resolve(name + OGG).toAbsolutePath().normalize();
     }
 
     /** @return a name that is not taken yet, derived from {@code suggested} */
@@ -75,6 +110,19 @@ public final class SongStore {
         return file != null && Files.isRegularFile(file);
     }
 
+    public static int count() {
+        return DiscResources.scanSoundNames().size();
+    }
+
+    /** @return bytes the whole library takes, which is what the store quota is measured against */
+    public static long totalBytes() {
+        long total = 0;
+        for (SongInfo song : scan()) {
+            total += song.size();
+        }
+        return total;
+    }
+
     /** Writes a track, replacing nothing: the caller picked the name with {@link #allocateName}. */
     public static SongInfo write(String name, byte[] data) throws IOException {
         Path file = resolve(name);
@@ -89,15 +137,18 @@ public final class SongStore {
         } finally {
             Files.deleteIfExists(temp);
         }
+        // The moved file is new bytes at a path the index may still hold under the old track.
+        INDEX.remove(file);
         return describe(name, file);
     }
 
-    public static byte[] readBytes(String name) throws IOException {
+    /** @return an open stream over a track, so a download never holds the whole file in memory */
+    public static InputStream open(String name) throws IOException {
         Path file = resolve(name);
         if (file == null || !Files.isRegularFile(file)) {
             throw new IOException("Unknown track " + name);
         }
-        return Files.readAllBytes(file);
+        return Files.newInputStream(file);
     }
 
     /** @return whether this side already holds a file matching the announced size and digest */
@@ -115,11 +166,16 @@ public final class SongStore {
 
     /** @return lowercase hex sha1 of a file, or an empty string when it could not be read */
     public static String sha1(Path file) {
-        try {
-            return hex(digest().digest(Files.readAllBytes(file)));
+        MessageDigest digest = digest();
+        try (InputStream stream = new DigestInputStream(Files.newInputStream(file), digest)) {
+            byte[] buffer = new byte[DIGEST_BUFFER];
+            while (stream.read(buffer) >= 0) {
+                // The digest is fed by the stream itself; only the read has to happen.
+            }
         } catch (IOException e) {
             return "";
         }
+        return hex(digest.digest());
     }
 
     public static String sha1(byte[] data) {

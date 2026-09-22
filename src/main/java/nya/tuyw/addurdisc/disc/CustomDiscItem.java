@@ -25,7 +25,7 @@ public class CustomDiscItem extends Item {
     @Override
     public Component getName(ItemStack stack) {
         SongBinding binding = stack.get(ModInitialize.DISC_SONG);
-        return binding == null ? super.getName(stack) : binding.description();
+        return binding == null || !binding.isBound() ? super.getName(stack) : binding.description();
     }
 
     @Override
