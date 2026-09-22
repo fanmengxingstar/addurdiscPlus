@@ -11,6 +11,7 @@ public class ConfigUtil {
     private static boolean dropbycreeper;
     private static boolean refreshlang;
     private static float defaultSongLengthSeconds;
+    private static String ffmpegCommand = "ffmpeg";
 
     public ConfigUtil() {
         refreshConfig();
@@ -22,6 +23,9 @@ public class ConfigUtil {
         dropbycreeper = config.canDropByCreeper;
         refreshlang = config.refreshLang;
         defaultSongLengthSeconds = config.defaultSongLengthSeconds;
+        ffmpegCommand = config.ffmpegPath == null || config.ffmpegPath.isBlank()
+                ? "ffmpeg"
+                : config.ffmpegPath.trim();
         if (config.customPath == null || config.customPath.isEmpty()) {
             path = FabricLoader.getInstance().getGameDir().toString();
         } else {
@@ -52,5 +56,9 @@ public class ConfigUtil {
 
     public static float getDefaultSongLengthSeconds() {
         return defaultSongLengthSeconds;
+    }
+
+    public static String getFfmpegCommand() {
+        return ffmpegCommand;
     }
 }

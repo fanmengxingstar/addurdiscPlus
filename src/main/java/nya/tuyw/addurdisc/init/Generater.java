@@ -9,7 +9,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
+import java.util.List;
 
 public class Generater {
     /**
@@ -29,7 +29,7 @@ public class Generater {
         }
     }
 
-    public static void GenTexturepng(InputStream inputStream, Path path, ArrayList<String> names) {
+    public static void GenTexturepng(InputStream inputStream, Path path, List<String> names) {
         try {
             BufferedImage image = ImageIO.read(inputStream);
             names.forEach((name) -> {
@@ -55,7 +55,7 @@ public class Generater {
      *     <li>{@code items/disc_<name>.json} – the item model definition pointing at that model</li>
      * </ul>
      */
-    public static void GenModelsjson(Path modelsPath, Path itemDefinitionsPath, ArrayList<String> names) {
+    public static void GenModelsjson(Path modelsPath, Path itemDefinitionsPath, List<String> names) {
         names.forEach((name) -> {
             String modelJson = "{\"parent\":\"minecraft:item/template_music_disc\",\"textures\":{\"layer0\":\"addurdisc:item/disc_"
                     + name + "\"}}";
@@ -67,7 +67,7 @@ public class Generater {
         });
     }
 
-    public static void GenLangjson(Path path, ArrayList<String> names) {
+    public static void GenLangjson(Path path, List<String> names) {
         File f = path.resolve("en_us.json").toFile();
         StringBuilder langjson = new StringBuilder("{");
         if (names != null && !names.isEmpty()) {
@@ -92,7 +92,7 @@ public class Generater {
         writein(f.toString(), json);
     }
 
-    public static void GenSoundsjson(Path path, ArrayList<String> names) {
+    public static void GenSoundsjson(Path path, List<String> names) {
         File f = path.resolve("sounds.json").toFile();
         StringBuilder jsonBuilder = new StringBuilder("{");
         if (names != null && !names.isEmpty()) {
@@ -108,7 +108,7 @@ public class Generater {
         writein(f.toString(), jsonBuilder.toString());
     }
 
-    public static void GenItemTags(Path path, ArrayList<String> names) {
+    public static void GenItemTags(Path path, List<String> names) {
         File f = path.toFile();
         StringBuilder datajson = new StringBuilder("{\"values\":[");
         if (names != null && !names.isEmpty()) {

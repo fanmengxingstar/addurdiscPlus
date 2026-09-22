@@ -4,7 +4,13 @@
 	"compatibilityLevel": "JAVA_25",
 	"mixins": [
 		"MixinPackRepository",
-		"FolderRepositorySourceAccessor"
+		"FolderRepositorySourceAccessor",
+		"JukeboxSongMixin",
+		"JukeboxPlayableTooltipMixin",
+		"JukeboxSongPlayerMixin"
+	],
+	"client": [
+		"LevelEventHandlerMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

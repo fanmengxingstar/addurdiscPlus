@@ -1,3 +1,18 @@
 {
-  "addurdisc_creativetab": "AddurDisc's discs"
+  "addurdisc_creativetab": "AddurDisc's discs",
+  "item.addurdisc.custom_disc": "Blank Music Disc",
+  "item.addurdisc.custom_disc.desc": "Empty - right click to add a song",
+  "addurdisc.screen.title": "Choose a music file",
+  "addurdisc.screen.hint": "Drop a file anywhere in this window, or",
+  "addurdisc.screen.browse": "browse for a file",
+  "addurdisc.screen.supported": "mp3 / wav / ogg, video files are accepted too - only their audio is kept",
+  "addurdisc.screen.processing": "Converting to mono OGG...",
+  "addurdisc.screen.imported": "Imported! The disc is ready to play.",
+  "addurdisc.screen.failed": "Import failed: ",
+  "addurdisc.screen.uploading": "Uploading to the server...",
+  "addurdisc.message.no_ffmpeg": "ffmpeg was not found. Install it, or set \"ffmpegPath\" in config/AddurDisc-common.json.",
+  "addurdisc.message.denied": "You need operator permission to upload music to this server.",
+  "addurdisc.message.sync_started": "Syncing music discs from the server...",
+  "addurdisc.message.sync_done": "Music discs synced.",
+  "addurdisc.message.sync_failed": "Failed to sync a music disc from the server."
 }

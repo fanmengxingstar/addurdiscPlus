@@ -1,3 +1,18 @@
 {
-  "addurdisc_creativetab": "AddurDisc添加的唱片"
+  "addurdisc_creativetab": "AddurDisc添加的唱片",
+  "item.addurdisc.custom_disc": "空白唱片",
+  "item.addurdisc.custom_disc.desc": "未绑定音乐——右键点击可添加歌曲",
+  "addurdisc.screen.title": "选择音乐文件",
+  "addurdisc.screen.hint": "把文件拖拽到窗口任意位置，或者",
+  "addurdisc.screen.browse": "点击浏览文件",
+  "addurdisc.screen.supported": "支持 mp3 / wav / ogg，含视频的文件也可以——只保留其中的音频",
+  "addurdisc.screen.processing": "正在转换为单声道 OGG……",
+  "addurdisc.screen.imported": "导入完成！唱片已可以使用。",
+  "addurdisc.screen.failed": "导入失败：",
+  "addurdisc.screen.uploading": "正在上传到服务器……",
+  "addurdisc.message.no_ffmpeg": "未找到 ffmpeg。请安装它，或在 config/AddurDisc-common.json 中设置 \"ffmpegPath\"。",
+  "addurdisc.message.denied": "需要管理员权限才能向该服务器上传音乐。",
+  "addurdisc.message.sync_started": "正在从服务器同步音乐文件……",
+  "addurdisc.message.sync_done": "音乐唱片同步完成。",
+  "addurdisc.message.sync_failed": "从服务器同步音乐唱片失败。"
 }

@@ -2,6 +2,7 @@ package nya.tuyw.addurdisc.init;
 
 import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
+import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
@@ -18,18 +19,16 @@ import net.minecraft.world.item.JukeboxSong;
 import net.minecraft.world.item.Rarity;
 import nya.tuyw.addurdisc.AddurDisc;
 import nya.tuyw.addurdisc.Config.ConfigUtil;
+import nya.tuyw.addurdisc.disc.CustomDiscItem;
+import nya.tuyw.addurdisc.disc.SongBinding;
 import nya.tuyw.addurdisc.util.OggVorbis;
 
 import java.io.File;
 import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.regex.Pattern;
 
 public class ModInitialize {
-    /** Comparator output reported by every generated jukebox song. */
-    private static final int COMPARATOR_OUTPUT = 15;
-
     public static final Path path;
     public static final Path sounds;
     public static final Path models;
@@ -60,6 +59,10 @@ public class ModInitialize {
     public static ArrayList<Item> addedDiscs;
     public static ArrayList<SoundEvent> loadedSounds;
     public static InputStream Stream;
+    /** Binding component every imported track is stored on. */
+    public static DataComponentType<SongBinding> DISC_SONG;
+    /** The single disc item shared by all imported tracks. */
+    public static Item CUSTOM_DISC;
 
     private static void initializePackmcmeta() {
         Generater.GenPackmcmeta(ConfigUtil.getResourcePath());
@@ -78,49 +81,51 @@ public class ModInitialize {
     }
 
     private static void initializeSounds() {
-        loadedSoundsNames = new ArrayList<>();
-        File dir = sounds.toFile();
-        File[] files = dir.listFiles();
-        if (files != null) {
-            AddurDisc.LOGGER.debug("Existing files:");
-            for (File f : files) {
-                AddurDisc.LOGGER.debug(dir.getName() + "/" + f.getName());
-                if (f.getName().endsWith(".ogg")) {
-                    if (checkFileName(f.getName())) {
-                        String names = f.getName().substring(0, f.getName().lastIndexOf('.'));
-                        loadedSoundsNames.add(names);
-                    } else {
-                        AddurDisc.LOGGER.warn(f.getName() + " contains illegal characters. Ignoring.");
-                    }
-                } else {
-                    AddurDisc.LOGGER.warn(f.getName() + " is not a valid sound file (not ending with .ogg). Ignoring.");
-                }
-            }
-            Generater.GenSoundsjson(path, loadedSoundsNames);
-            Generater.GenTexturepng(Stream, textures, loadedSoundsNames);
-            Generater.GenModelsjson(models, itemDefinitions, loadedSoundsNames);
-            if (ConfigUtil.getrefreshlang()) {
-                Generater.GenLangjson(lang, loadedSoundsNames);
-            } else {
-                AddurDisc.LOGGER.debug("refreshLang:false, will not refresh the en_us.json");
-            }
-            if (ConfigUtil.getDropbycreeper()) {
-                deleteFile(data.resolve("music_discs.json").toFile());
-                Generater.GenItemTags(data.resolve("creeper_drop_music_discs.json"), loadedSoundsNames);
-            } else {
-                deleteFile(data.resolve("creeper_drop_music_discs.json").toFile());
-                Generater.GenItemTags(data.resolve("music_discs.json"), loadedSoundsNames);
-            }
-            AddurDisc.LOGGER.debug("Loaded files:" + loadedSoundsNames);
-            AddurDisc.LOGGER.debug("Sounds are all ready");
-            RegisterSounds();
-            RegisterItems();
-            RegisterTabs();
-        }
+        loadedSoundsNames = DiscResources.scanSoundNames();
+        DiscResources.writePackFiles(loadedSoundsNames);
+        AddurDisc.LOGGER.debug("Loaded files:" + loadedSoundsNames);
+        AddurDisc.LOGGER.debug("Sounds are all ready");
+        RegisterSounds();
+        RegisterItems();
+        RegisterTabs();
+    }
+
+    /**
+     * Registers the one disc item that every imported track shares. The item registry is frozen
+     * once bootstrapping is over, which is why an import can only rebind this item instead of
+     * registering a disc of its own.
+     */
+    private static void registerCustomDisc() {
+        Identifier componentId = Identifier.fromNamespaceAndPath(AddurDisc.MODID, "disc_song");
+        DISC_SONG = Registry.register(BuiltInRegistries.DATA_COMPONENT_TYPE, componentId,
+                DataComponentType.<SongBinding>builder()
+                        .persistent(SongBinding.CODEC)
+                        .networkSynchronized(SongBinding.PACKET_CODEC)
+                        .cacheEncoding()
+                        .build());
+
+        ResourceKey<Item> key = ResourceKey.create(Registries.ITEM,
+                Identifier.fromNamespaceAndPath(AddurDisc.MODID, "custom_disc"));
+
+        // Vanilla gates jukebox insertion on the mere presence of this component, so the item
+        // carries a placeholder song and JukeboxSongMixin swaps in the imported track. A blank disc
+        // shows the placeholder's description, which is the "right click to add a song" hint.
+        SoundEvent silence = SoundEvent.createVariableRangeEvent(
+                Identifier.fromNamespaceAndPath(AddurDisc.MODID, "custom_disc_placeholder"));
+        JukeboxSong placeholder = new JukeboxSong(Holder.direct(silence),
+                Component.translatable("item." + AddurDisc.MODID + ".custom_disc.desc"),
+                0.0F, SongBinding.COMPARATOR_OUTPUT);
+
+        CUSTOM_DISC = Registry.register(BuiltInRegistries.ITEM, key, new CustomDiscItem(new Item.Properties()
+                .setId(key)
+                .stacksTo(1)
+                .rarity(Rarity.RARE)
+                .component(DataComponents.JUKEBOX_PLAYABLE, new JukeboxPlayable(Holder.direct(placeholder)))));
     }
 
     public ModInitialize() {
         Stream = getClass().getClassLoader().getResourceAsStream("custom.png");
+        registerCustomDisc();
         initializeSounds();
     }
 
@@ -155,7 +160,7 @@ public class ModInitialize {
                     soundHolder,
                     Component.translatable("item." + AddurDisc.MODID + ".disc_" + name + ".desc"),
                     lengthInSeconds,
-                    COMPARATOR_OUTPUT
+                    SongBinding.COMPARATOR_OUTPUT
             );
             Holder<JukeboxSong> songHolder = Holder.direct(song);
 
@@ -175,6 +180,7 @@ public class ModInitialize {
                 .icon(() -> new ItemStack(Items.JUKEBOX))
                 .title(Component.translatable("addurdisc_creativetab"))
                 .displayItems((params, output) -> {
+                    output.accept(CUSTOM_DISC);
                     for (Item item : addedDiscs) {
                         output.accept(item);
                     }
@@ -183,19 +189,9 @@ public class ModInitialize {
         Registry.register(BuiltInRegistries.CREATIVE_MODE_TAB, Identifier.fromNamespaceAndPath(AddurDisc.MODID, "addurdisc_creativetab"), creativeModeTab);
     }
 
-    private static boolean checkFileName(String str) {
-        return Pattern.compile("^[a-z0-9._-]+$").matcher(str).find();
-    }
-
     private static void checkResourcesPath(Path p) {
         if (!p.toFile().exists()) {
             p.toFile().mkdirs();
-        }
-    }
-
-    private static void deleteFile(File f) {
-        if (f.exists()) {
-            f.delete();
         }
     }
 }

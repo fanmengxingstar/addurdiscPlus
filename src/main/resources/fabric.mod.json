@@ -18,6 +18,9 @@
 	"entrypoints": {
 		"main": [
 			"nya.tuyw.addurdisc.AddurDisc"
+		],
+		"client": [
+			"nya.tuyw.addurdisc.AddurDiscClient"
 		]
 	},
 	"mixins": [
