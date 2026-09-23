@@ -82,7 +82,7 @@ public final class ConfigHandler {
         if (config.customPathName == null || !isSingleSegmentName(config.customPathName)) {
             config.customPathName = fallback.customPathName;
         }
-        if (config.customPath == null) {
+        if (config.customPath == null || !isSafeRelativePath(config.customPath)) {
             config.customPath = "";
         }
         if (!Float.isFinite(config.defaultSongLengthSeconds)
@@ -111,6 +111,26 @@ public final class ConfigHandler {
         }
         return name.indexOf('/') < 0 && name.indexOf('\\') < 0 && name.indexOf('\0') < 0
                 && name.indexOf(':') < 0;
+    }
+
+    private static boolean isSafeRelativePath(String value) {
+        if (value.isBlank()) {
+            return true;
+        }
+        try {
+            Path path = Path.of(value);
+            if (path.isAbsolute()) {
+                return false;
+            }
+            for (Path part : path) {
+                if (part.toString().equals("..") || part.toString().equals(".")) {
+                    return false;
+                }
+            }
+            return value.indexOf('\0') < 0;
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     private static String fileStamp() {

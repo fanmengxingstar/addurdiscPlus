@@ -55,7 +55,9 @@ public class JukeboxSongPlayerMixin {
         }
         for (ServerPlayer player : serverLevel.getEntitiesOfClass(ServerPlayer.class,
                 new AABB(this.blockPos).inflate(ANNOUNCE_RANGE))) {
-            ServerPlayNetworking.send(player, new PlaySong(sound, this.blockPos));
+            if (ServerPlayNetworking.canSend(player, PlaySong.TYPE)) {
+                ServerPlayNetworking.send(player, new PlaySong(sound, this.blockPos));
+            }
         }
     }
 }

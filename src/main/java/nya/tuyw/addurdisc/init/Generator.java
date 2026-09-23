@@ -3,6 +3,7 @@ package nya.tuyw.addurdisc.init;
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 import com.mojang.serialization.JsonOps;
 import net.minecraft.SharedConstants;
 import net.minecraft.network.chat.Component;
@@ -64,8 +65,9 @@ public final class Generator {
                 json.append(',');
             }
             String name = names.get(i);
-            json.append('"').append(name)
-                    .append("\":{\"category\":\"record\",\"sounds\":[{\"name\":\"addurdisc:")
+            String escaped = new Gson().toJson(new JsonPrimitive(name));
+            json.append(escaped)
+                    .append(":{\"category\":\"record\",\"sounds\":[{\"name\":\"addurdisc:")
                     .append(name).append("\",\"stream\":true,\"attenuation_distance\":")
                     .append(DiscProtocol.AUDIBLE_BLOCKS).append("}]}");
         }

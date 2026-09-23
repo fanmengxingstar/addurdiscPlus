@@ -236,8 +236,9 @@ public final class DiscClientNetwork {
     private static void onDownloadStart(DownloadStart payload, ClientPlayNetworking.Context context) {
         // Only ever the answer to a request this side sent: a name nobody asked for would replace the
         // transfer in flight, and an announced size is what later chunks are allowed to fill up.
-        if (!payload.name().equals(waitingFor) || payload.size() <= 0
-                || payload.size() > ConfigUtil.getMaxSongBytes()) {
+        if (!payload.name().equals(waitingFor) || !DiscResources.isValidName(payload.name())
+                || payload.size() <= 0 || payload.size() > ConfigUtil.getMaxSongBytes()
+                || payload.sha1() == null || !payload.sha1().matches("[0-9a-fA-F]{40}")) {
             AddurDisc.LOGGER.warn("Ignored the sync offer for {}, which was not asked for.", payload.name());
             return;
         }
@@ -257,7 +258,16 @@ public final class DiscClientNetwork {
             giveUpDownload(payload.name(), "sent more bytes than it announced");
             return;
         }
+        long expectedLeft = download.expectedBytes() - download.receivedBytes();
+        if (payload.bytesLeft() < 0 || payload.bytesLeft() != expectedLeft) {
+            giveUpDownload(payload.name(), "invalid remaining byte count");
+            return;
+        }
         if (payload.bytesLeft() > 0) {
+            return;
+        }
+        if (!download.isComplete()) {
+            giveUpDownload(payload.name(), "download ended before the announced size");
             return;
         }
         byte[] ogg = download.bytes();

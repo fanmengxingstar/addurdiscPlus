@@ -99,8 +99,14 @@ public final class DiscNetwork {
         ServerPlayNetworking.registerGlobalReceiver(UploadChunk.TYPE, DiscNetwork::onUploadChunk);
         ServerPlayNetworking.registerGlobalReceiver(RequestSong.TYPE, DiscNetwork::onRequestSong);
 
-        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
-                DiscPayloads.pagesOf(SongStore.scan()).forEach(sender::sendPacket));
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+            if (ServerPlayNetworking.canSend(handler.getPlayer(), SongList.TYPE)) {
+                Util.backgroundExecutor().execute(() -> {
+                    List<SongList> pages = DiscPayloads.pagesOf(SongStore.scan());
+                    server.execute(() -> pages.forEach(page -> send(handler.getPlayer(), page)));
+                });
+            }
+        });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             UUID id = handler.getPlayer().getUUID();
             finishUpload(id);
@@ -112,6 +118,17 @@ public final class DiscNetwork {
 
     private static void onUploadStart(UploadStart payload, ServerPlayNetworking.Context context) {
         ServerPlayer player = context.player();
+        if (payload.transfer() == null || payload.hand() == null) {
+            return;
+        }
+        if (!ServerPlayNetworking.canSend(player, UploadResult.TYPE)
+                || !DiscResources.isValidName(payload.suggestedName())
+                || payload.title() == null || payload.title().length() > DiscProtocol.TITLE_CHARS
+                || payload.size() <= 0 || payload.size() > ConfigUtil.getMaxSongBytes()
+                || payload.sha1() == null || (!payload.sha1().isEmpty() && !payload.sha1().matches("[0-9a-fA-F]{40}"))) {
+            fail(player, payload.transfer(), Failure.CORRUPT);
+            return;
+        }
         UUID id = player.getUUID();
         if (UPLOADS.containsKey(id)) {
             // Two transfers at once would otherwise have the second one's bytes stored under the
@@ -132,7 +149,7 @@ public final class DiscNetwork {
             fail(player, payload.transfer(), Failure.TOO_MANY_TRACKS);
             return;
         }
-        long free = ConfigUtil.getMaxStoreBytes() - SongStore.totalBytes();
+        long free = Math.max(0L, ConfigUtil.getMaxStoreBytes() - SongStore.totalBytes());
         if (payload.size() > free) {
             fail(player, payload.transfer(), Failure.STORE_FULL);
             return;
@@ -206,6 +223,12 @@ public final class DiscNetwork {
     private static void storeOnDisk(MinecraftServer server, ServerPlayer player, Upload upload, byte[] ogg) {
         SongInfo stored;
         try {
+            if (SongStore.count() >= ConfigUtil.getMaxTracks()
+                    || ogg.length > ConfigUtil.getMaxSongBytes()
+                    || ogg.length > Math.max(0L, ConfigUtil.getMaxStoreBytes() - SongStore.totalBytes())) {
+                server.execute(() -> fail(player, upload.transfer(), Failure.STORE_FULL));
+                return;
+            }
             String name = SongStore.allocateName(upload.assembler().name());
             stored = SongStore.write(name, ogg);
             if (stored == null) {
@@ -239,17 +262,20 @@ public final class DiscNetwork {
             // safely in the library, only the binding is lost.
             AddurDisc.LOGGER.info("{} imported {} but no longer holds that disc.", describe(player), stored.name());
         }
-        ServerPlayNetworking.send(player, new UploadResult(upload.transfer(), Failure.NONE,
+        send(player, new UploadResult(upload.transfer(), Failure.NONE,
                 stored.name(), stored.lengthInSeconds()));
         AddurDisc.LOGGER.info("{} imported {} ({} bytes).", describe(player), stored.name(), stored.size());
         // The importing client only learned bytes so far; the same announcement it would send to any
         // other player is what lets it keep a local copy of the track.
-        server.getPlayerList().getPlayers().forEach(other ->
-                ServerPlayNetworking.send(other, new SongList(List.of(stored))));
+        server.getPlayerList().getPlayers().forEach(other -> send(other, new SongList(List.of(stored))));
     }
 
     private static void onRequestSong(RequestSong payload, ServerPlayNetworking.Context context) {
         ServerPlayer player = context.player();
+        if (!ServerPlayNetworking.canSend(player, DownloadStart.TYPE)
+                || payload.name() == null || !DiscResources.isValidName(payload.name())) {
+            return;
+        }
         if (!allowRequest(player.getUUID())) {
             AddurDisc.LOGGER.warn("{} is asking for tracks faster than a sync should.", describe(player));
             return;
@@ -265,8 +291,7 @@ public final class DiscNetwork {
             AddurDisc.LOGGER.warn("{} asked for the unknown track {}.", describe(player), payload.name());
             return;
         }
-        ServerPlayNetworking.send(player, new DownloadStart(wanted.name(), wanted.size(),
-                wanted.sha1(), wanted.lengthInSeconds()));
+        send(player, new DownloadStart(wanted.name(), wanted.size(), wanted.sha1(), wanted.lengthInSeconds()));
         MinecraftServer server = context.server();
         Util.backgroundExecutor().execute(() -> streamTrack(server, player, wanted));
     }
@@ -294,7 +319,7 @@ public final class DiscNetwork {
                 final long left = Math.max(wanted.size() - sent, 0);
                 final byte[] chunk = read == buffer.length ? buffer.clone() : Arrays.copyOf(buffer, read);
                 throttle.acquire(chunk.length);
-                server.execute(() -> ServerPlayNetworking.send(player, new DownloadChunk(wanted.name(), chunk, (int) left)));
+            server.execute(() -> send(player, new DownloadChunk(wanted.name(), chunk, (int) left)));
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -315,7 +340,19 @@ public final class DiscNetwork {
 
     private static void fail(ServerPlayer player, UUID transfer, Failure failure) {
         AddurDisc.LOGGER.warn("Refused an import from {}: {}.", describe(player), failure);
-        ServerPlayNetworking.send(player, new UploadResult(transfer, failure, "", 0));
+        send(player, new UploadResult(transfer, failure, "", 0));
+    }
+
+    private static void send(ServerPlayer player, net.minecraft.network.protocol.common.custom.CustomPacketPayload payload) {
+        if (player.hasDisconnected()) {
+            return;
+        }
+        if (payload instanceof UploadResult && !ServerPlayNetworking.canSend(player, UploadResult.TYPE)) return;
+        if (payload instanceof SongList && !ServerPlayNetworking.canSend(player, SongList.TYPE)) return;
+        if (payload instanceof DownloadStart && !ServerPlayNetworking.canSend(player, DownloadStart.TYPE)) return;
+        if (payload instanceof DownloadChunk && !ServerPlayNetworking.canSend(player, DownloadChunk.TYPE)) return;
+        if (payload instanceof PlaySong && !ServerPlayNetworking.canSend(player, PlaySong.TYPE)) return;
+        ServerPlayNetworking.send(player, payload);
     }
 
     private static String describe(ServerPlayer player) {

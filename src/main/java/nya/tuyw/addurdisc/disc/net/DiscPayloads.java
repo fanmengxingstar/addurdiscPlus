@@ -78,6 +78,10 @@ public final class DiscPayloads {
     /** Client asks the server to take a converted track; {@code hand} is the disc to bind it to. */
     public record UploadStart(UUID transfer, String suggestedName, String title, long size, String sha1, InteractionHand hand)
             implements CustomPacketPayload {
+        public UploadStart {
+            if (sha1 == null) sha1 = "";
+            if (title == null) title = "";
+        }
         public static final CustomPacketPayload.Type<UploadStart> TYPE = new CustomPacketPayload.Type<>(id("upload_start"));
         public static final StreamCodec<RegistryFriendlyByteBuf, UploadStart> STREAM_CODEC = StreamCodec.composite(
                 UUIDUtil.STREAM_CODEC, UploadStart::transfer,
@@ -97,6 +101,9 @@ public final class DiscPayloads {
 
     /** Client sends the converted ogg in order; the last chunk closes the transfer. */
     public record UploadChunk(UUID transfer, byte[] bytes) implements CustomPacketPayload {
+        public UploadChunk {
+            if (bytes == null) bytes = new byte[0];
+        }
         public static final CustomPacketPayload.Type<UploadChunk> TYPE = new CustomPacketPayload.Type<>(id("upload_chunk"));
         public static final StreamCodec<RegistryFriendlyByteBuf, UploadChunk> STREAM_CODEC = StreamCodec.composite(
                 UUIDUtil.STREAM_CODEC, UploadChunk::transfer,
@@ -180,6 +187,10 @@ public final class DiscPayloads {
 
     /** Server sends a track in order. */
     public record DownloadChunk(String name, byte[] bytes, int bytesLeft) implements CustomPacketPayload {
+        public DownloadChunk {
+            if (bytes == null) bytes = new byte[0];
+            if (bytesLeft < 0) bytesLeft = Integer.MAX_VALUE;
+        }
         public static final CustomPacketPayload.Type<DownloadChunk> TYPE = new CustomPacketPayload.Type<>(id("download_chunk"));
         public static final StreamCodec<RegistryFriendlyByteBuf, DownloadChunk> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.stringUtf8(DiscProtocol.NAME_CHARS), DownloadChunk::name,

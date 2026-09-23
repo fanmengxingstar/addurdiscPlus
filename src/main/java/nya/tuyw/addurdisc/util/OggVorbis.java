@@ -100,7 +100,8 @@ public final class OggVorbis {
         if (packet + 16 > head.limit() || head.get(packet) != 1 || !matches(head, packet + 1, "vorbis")) {
             return -1L;
         }
-        return readUnsignedIntLE(head, packet + SAMPLE_RATE_OFFSET_IN_ID_HEADER);
+        long rate = readUnsignedIntLE(head, packet + SAMPLE_RATE_OFFSET_IN_ID_HEADER);
+        return rate >= 1L && rate <= 384000L ? rate : -1L;
     }
 
     /**
@@ -126,7 +127,7 @@ public final class OggVorbis {
             expectedEnd = i;
             long granule = readLongLE(tail, i + GRANULE_POSITION_OFFSET);
             // -1 marks a page on which no packet finished; step further back.
-            if (granule >= 0L) {
+            if (granule > 0L) {
                 return granule;
             }
         }

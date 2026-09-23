@@ -50,6 +50,10 @@ public final class ChunkAssembler {
         return (long) filled == expectedBytes;
     }
 
+    public long receivedBytes() {
+        return filled;
+    }
+
     /**
      * @return the assembled track, which is the backing buffer itself: the assembler is discarded
      * afterwards, and handing the array over without copying is the point of sizing it exactly.

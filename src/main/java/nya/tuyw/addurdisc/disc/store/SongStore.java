@@ -88,7 +88,13 @@ public final class SongStore {
             AddurDisc.LOGGER.warn("Rejected the illegal track name {}", name);
             return null;
         }
-        return DiscResources.soundDir().resolve(name + OGG).toAbsolutePath().normalize();
+        Path root = DiscResources.soundDir().toAbsolutePath().normalize();
+        Path file = root.resolve(name + OGG).normalize();
+        if (!file.getParent().equals(root) || !file.startsWith(root)) {
+            AddurDisc.LOGGER.warn("Rejected track path outside the sound directory: {}", name);
+            return null;
+        }
+        return file;
     }
 
     /** @return a name that is not taken yet, derived from {@code suggested} */
@@ -118,8 +124,16 @@ public final class SongStore {
     /** @return bytes the whole library takes, which is what the store quota is measured against */
     public static long totalBytes() {
         long total = 0;
-        for (SongInfo song : scan()) {
-            total += song.size();
+        for (String name : DiscResources.scanSoundNames()) {
+            Path file = resolve(name);
+            if (file == null || !Files.isRegularFile(file)) {
+                continue;
+            }
+            try {
+                total = Math.addExact(total, Files.size(file));
+            } catch (IOException | ArithmeticException e) {
+                AddurDisc.LOGGER.warn("Could not measure track {}", name, e);
+            }
         }
         return total;
     }
@@ -131,11 +145,17 @@ public final class SongStore {
             throw new IOException("Illegal track name " + name);
         }
         Files.createDirectories(file.getParent());
+        if (Files.exists(file, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                && !Files.isRegularFile(file, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("Track path is not a regular file: " + name);
+        }
         // The temporary file carries a unique suffix because a track can be written from the store
         // thread of the server and from the client thread of an integrated server at the same time.
         Path temp = file.getParent().resolve(TEMP_PREFIX + name + "-" + UUID.randomUUID() + OGG);
         try {
             Files.write(temp, data);
+            Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
             Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING);
         } finally {
             Files.deleteIfExists(temp);
