@@ -67,15 +67,19 @@ public final class DiscClientSounds {
     /**
      * Re-reads the sound definitions of the generated pack, which is the sound half of a resource
      * reload without the loading screen a whole one costs. Both halves run on the calling thread, so
-     * the tracks that were just written are known the moment this returns.
+     * the tracks that were just written are known the moment this returns. That is a deliberate
+     * trade-off: the cost is logged, because on a large instance it is visible as a stutter.
      */
     public static void reloadSoundDefinitions() {
         Minecraft client = Minecraft.getInstance();
+        long startNanos = System.nanoTime();
         Executor inline = command -> command.run();
         client.getSoundManager()
                 .reload(new PreparableReloadListener.SharedState(client.getResourceManager()),
                         inline, CompletableFuture::completedFuture, inline)
                 .join();
+        AddurDisc.LOGGER.debug("Reloaded the sound definitions in {} ms.",
+                (System.nanoTime() - startNanos) / 1_000_000L);
     }
 
     /** Remembers the jukebox and pulls the track, so stopping the disc also drops the pending play. */

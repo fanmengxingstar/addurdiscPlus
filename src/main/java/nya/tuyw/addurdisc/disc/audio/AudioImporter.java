@@ -2,11 +2,15 @@ package nya.tuyw.addurdisc.disc.audio;
 
 import nya.tuyw.addurdisc.AddurDisc;
 import nya.tuyw.addurdisc.config.ConfigUtil;
+import nya.tuyw.addurdisc.disc.DiscProtocol;
 import nya.tuyw.addurdisc.init.DiscResources;
+import nya.tuyw.addurdisc.util.Utf8;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.text.Normalizer;
@@ -19,7 +23,11 @@ import java.text.Normalizer;
  * the final file name, so even a local import goes through the same upload path.</p>
  */
 public final class AudioImporter {
-    /** Raw files are read into memory before conversion, hence the hard cap. */
+    /**
+     * Largest input file the converter accepts. Only its size is read on this side — ffmpeg opens
+     * the file itself — but the converted result is held in memory, so an absurd input is still
+     * worth turning away before ffmpeg spends minutes on it.
+     */
     public static final long MAX_SOURCE_BYTES = 200L * 1024 * 1024;
     /** libvorbis quality mode; 4 is roughly 128 kbps, transparent enough for a music disc. */
     private static final String VORBIS_QUALITY = "4";
@@ -63,16 +71,44 @@ public final class AudioImporter {
             return null;
         }
         boolean windows = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+        List<String> suffixes = executableSuffixes(windows);
         for (String dir : pathVariable.split(java.io.File.pathSeparator)) {
             if (dir.isBlank()) {
                 continue;
             }
-            Path candidate = Path.of(dir).resolve(command + (windows ? ".exe" : ""));
-            if (Files.isExecutable(candidate)) {
-                return candidate;
+            Path folder = Path.of(dir);
+            for (String suffix : suffixes) {
+                Path candidate = folder.resolve(command + suffix);
+                if (Files.isExecutable(candidate)) {
+                    return candidate;
+                }
             }
         }
         return null;
+    }
+
+    /**
+     * @return the extensions a bare command name can carry, taken from {@code PATHEXT} on Windows.
+     * Appending only {@code .exe} used to miss the {@code .bat} and {@code .cmd} wrappers that
+     * package managers install, and reported a working ffmpeg as missing.
+     */
+    private static List<String> executableSuffixes(boolean windows) {
+        if (!windows) {
+            return List.of("");
+        }
+        List<String> suffixes = new ArrayList<>();
+        String pathExt = System.getenv("PATHEXT");
+        if (pathExt != null) {
+            for (String extension : pathExt.split(";")) {
+                if (!extension.isBlank()) {
+                    suffixes.add(extension.startsWith(".") ? extension : "." + extension);
+                }
+            }
+        }
+        if (suffixes.isEmpty()) {
+            suffixes.add(".exe");
+        }
+        return suffixes;
     }
 
     private static byte[] run(Path source) throws ImportFailedException, InterruptedException {
@@ -182,13 +218,16 @@ public final class AudioImporter {
 
     /**
      * @return the picked file name as the player wrote it, less the extension and any control
-     * characters, which is what the disc is called. Bounded because other players read it too.
+     * characters, which is what the disc is called. Bounded in characters and then in UTF-8 bytes,
+     * because other players read it over the network and a Chinese name costs three bytes per
+     * character: 64 of them would be a third over what the title codec accepts.
      */
     static String title(String fileName) {
         String extension = extensionOf(fileName);
         String base = extension.isEmpty() ? fileName : fileName.substring(0, fileName.length() - extension.length() - 1);
         String flat = base.replaceAll("\\p{Cntrl}", " ").strip();
-        return flat.length() <= 64 ? flat : flat.substring(0, 64).strip();
+        String capped = flat.length() <= 64 ? flat : flat.substring(0, 64).strip();
+        return Utf8.truncate(capped, DiscProtocol.TITLE_CHARS);
     }
 
     private static void trimSeparators(StringBuilder name) {

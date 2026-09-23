@@ -40,11 +40,33 @@ public final class OggVorbis {
     private static final int TAIL_WINDOW = 256 * 1024;
 
     /**
+     * @return whether the file parses as an Ogg Vorbis stream with a positive sample count.
+     *
+     * <p>The server checks this before letting an upload into the shared library: the digest a
+     * client announces only proves the bytes are the ones the client sent, not that they are audio,
+     * and a garbage track would be served to every other client. The check is bounded to the head
+     * and tail of the file, so it is cheap even for large tracks.</p>
+     */
+    public static boolean isPlayableVorbis(Path file) {
+        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
+            long fileSize = channel.size();
+            if (fileSize < PAGE_HEADER_SIZE) {
+                return false;
+            }
+            if (readSampleRate(channel, fileSize) <= 0L) {
+                return false;
+            }
+            return readLastGranulePosition(channel, fileSize) > 0L;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
      * @return the duration of the file in seconds, or {@code fallbackSeconds} when the file is not
      * a readable Ogg Vorbis stream.
      */
-    public static float readDurationSeconds(Path file, float fallbackSeconds) {
-        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
+    public static float readDurationSeconds(Path file, float fallbackSeconds) {        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
             long fileSize = channel.size();
             if (fileSize < PAGE_HEADER_SIZE) {
                 return fallbackSeconds;

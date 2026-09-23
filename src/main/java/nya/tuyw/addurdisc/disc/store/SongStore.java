@@ -18,6 +18,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -130,7 +131,9 @@ public final class SongStore {
             throw new IOException("Illegal track name " + name);
         }
         Files.createDirectories(file.getParent());
-        Path temp = file.getParent().resolve(TEMP_PREFIX + name + OGG);
+        // The temporary file carries a unique suffix because a track can be written from the store
+        // thread of the server and from the client thread of an integrated server at the same time.
+        Path temp = file.getParent().resolve(TEMP_PREFIX + name + "-" + UUID.randomUUID() + OGG);
         try {
             Files.write(temp, data);
             Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING);
@@ -151,15 +154,35 @@ public final class SongStore {
         return Files.newInputStream(file);
     }
 
-    /** @return whether this side already holds a file matching the announced size and digest */
+    /**
+     * @return whether this side already holds a file matching the announced size and digest
+     *
+     * <p>Goes through {@link #describe}, so the digest comes out of {@link #INDEX} whenever the
+     * file's size and timestamp are unchanged. Hashing the whole library here instead was a stall
+     * on the thread that runs the packet handler: a client joining a server with a full library
+     * read every byte of it again on the render thread.</p>
+     */
     public static boolean hasUpToDate(SongInfo expected) {
         Path file = resolve(expected.name());
         if (file == null || !Files.isRegularFile(file)) {
             return false;
         }
+        SongInfo actual = describe(expected.name(), file);
+        return actual != null && actual.size() == expected.size() && actual.sha1().equals(expected.sha1());
+    }
+
+    /** @return whether the track was on disk and is now gone */
+    public static boolean remove(String name) {
+        Path file = resolve(name);
+        if (file == null) {
+            return false;
+        }
         try {
-            return Files.size(file) == expected.size() && sha1(file).equals(expected.sha1());
+            boolean deleted = Files.deleteIfExists(file);
+            INDEX.remove(file);
+            return deleted;
         } catch (IOException e) {
+            AddurDisc.LOGGER.error("Could not delete {}", file, e);
             return false;
         }
     }

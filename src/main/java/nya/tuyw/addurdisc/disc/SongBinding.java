@@ -14,6 +14,7 @@ import net.minecraft.world.item.JukeboxSong;
 import nya.tuyw.addurdisc.AddurDisc;
 import nya.tuyw.addurdisc.config.ConfigUtil;
 import nya.tuyw.addurdisc.init.DiscResources;
+import nya.tuyw.addurdisc.util.Utf8;
 
 /**
  * Binds an imported track to a {@link CustomDiscItem}.
@@ -24,8 +25,9 @@ import nya.tuyw.addurdisc.init.DiscResources;
  * registry that vanilla's own components and packets point at.</p>
  *
  * <p>Every value is normalised in the canonical constructor, which is the one path both a codec
- * decode and a {@code /give} share. Without it a hand written component could carry a title the
- * packet codec refuses to encode, and the player holding it would be kicked on every login.</p>
+ * decode and a {@code /give} share. The limits are counted in UTF-8 <em>bytes</em>, because that is
+ * what the packet codec enforces: a title cut to a character count could still be three times the
+ * size the codec accepts, and the player holding such an item would be kicked on every login.</p>
  */
 public record SongBinding(String sound, float lengthInSeconds, String title) {
     /** Comparator output a jukebox reports while one of these discs plays. */
@@ -47,9 +49,12 @@ public record SongBinding(String sound, float lengthInSeconds, String title) {
     );
 
     public SongBinding {
-        sound = sound == null || sound.length() > DiscProtocol.NAME_CHARS ? "" : sound;
+        // Both fields are capped in UTF-8 bytes rather than characters: the lengths are the same for
+        // an ASCII track name, but a Chinese title costs three bytes per character and a
+        // character count would let it through at up to three times the codec's limit.
+        sound = Utf8.truncate(sound, DiscProtocol.NAME_CHARS);
         String plain = title == null ? "" : ChatFormatting.stripFormatting(title);
-        title = plain.length() > DiscProtocol.TITLE_CHARS ? plain.substring(0, DiscProtocol.TITLE_CHARS) : plain;
+        title = Utf8.truncate(plain, DiscProtocol.TITLE_CHARS);
         if (!Float.isFinite(lengthInSeconds) || lengthInSeconds <= 0.0F) {
             lengthInSeconds = ConfigUtil.getDefaultSongLengthSeconds();
         } else if (lengthInSeconds > MAX_LENGTH_SECONDS) {

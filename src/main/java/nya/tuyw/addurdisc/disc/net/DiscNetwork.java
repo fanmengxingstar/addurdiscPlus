@@ -3,7 +3,9 @@ package nya.tuyw.addurdisc.disc.net;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.Util;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 import nya.tuyw.addurdisc.AddurDisc;
@@ -24,6 +26,7 @@ import nya.tuyw.addurdisc.disc.store.SongInfo;
 import nya.tuyw.addurdisc.disc.store.SongStore;
 import nya.tuyw.addurdisc.init.DiscResources;
 import nya.tuyw.addurdisc.init.ModInitialize;
+import nya.tuyw.addurdisc.util.OggVorbis;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -31,14 +34,23 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Server half of the disc protocol. The server owns the sounds folder, so an imported track only
  * becomes real once it has been written here, and every client is served the same bytes from here.
  *
  * <p>Handlers run on the server thread, which is what lets a plain map hold the transfers in flight
- * without any locking.</p>
+ * without any locking. The expensive parts deliberately do not: writing, hashing and reading a
+ * track is tens of megabytes of disk work, and doing it on the server thread freezes the world for
+ * every player, so imports go to a dedicated background thread and downloads stream off the
+ * server's tick entirely. Anything that touches game state afterwards hops back with
+ * {@code server.execute}, because {@code Connection.send} is only safe from the server's own
+ * thread.</p>
  */
 public final class DiscNetwork {
     /** Bytes every open upload together is allowed to hold in memory. */
@@ -46,10 +58,32 @@ public final class DiscNetwork {
     /** How often one player may pull a track; a client asks once per missing song. */
     private static final int REQUESTS_PER_SECOND = 8;
     private static final long REQUEST_WINDOW_MILLIS = 1000L;
+    /**
+     * Sustained download speed one player is allowed, which is what keeps a modified client from
+     * turning "ask for every track as fast as possible" into a bandwidth and disk drain.
+     */
+    private static final long DOWNLOAD_BYTES_PER_SECOND = 16L * 1024 * 1024;
+    /** Download burst a player gets before the sustained rate above starts to apply. */
+    private static final long DOWNLOAD_BURST_BYTES = 2L * 1024 * 1024;
 
     private static final Map<UUID, Upload> UPLOADS = new HashMap<>();
     private static final Map<UUID, RequestLog> REQUESTS = new HashMap<>();
+    /** Players with a track currently streaming to them; one download at a time per player. */
+    private static final Set<UUID> DOWNLOADING = ConcurrentHashMap.newKeySet();
+    private static final Map<UUID, DownloadThrottle> THROTTLES = new ConcurrentHashMap<>();
     private static long bytesInFlight;
+
+    /**
+     * One daemon thread for every write into the sounds folder. Imports are rare but each moves up
+     * to the configured per-track limit, and serialising them keeps name allocation race free while
+     * the server thread never blocks on disk. A daemon thread never keeps the JVM alive after the
+     * server stops.
+     */
+    private static final ExecutorService STORE = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "addurdisc-track-store");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     public static void register() {
         PayloadTypeRegistry.serverboundPlay().register(UploadStart.TYPE, UploadStart.STREAM_CODEC);
@@ -71,6 +105,8 @@ public final class DiscNetwork {
             UUID id = handler.getPlayer().getUUID();
             finishUpload(id);
             REQUESTS.remove(id);
+            DOWNLOADING.remove(id);
+            THROTTLES.remove(id);
         });
     }
 
@@ -135,15 +171,21 @@ public final class DiscNetwork {
         try {
             store(context, upload);
         } catch (RuntimeException e) {
-            // Storing a track touches the disk and the generated pack, so it can fail. The client is
-            // waiting for an answer either way, and a screen stuck on "uploading" gives no clue why.
+            // The client is waiting for an answer either way, and a screen stuck on "uploading"
+            // gives no clue why.
             AddurDisc.LOGGER.error("Could not finish the import from {}.", describe(player), e);
             fail(player, upload.transfer(), Failure.STORAGE_FAILED);
         }
     }
 
+    /**
+     * Validates the received bytes on the server thread, then hands the disk work to the store
+     * thread. The track binds to the disc only once it is safely on disk, back on the server
+     * thread, where the hand check runs again for the same reason it always did.
+     */
     private static void store(ServerPlayNetworking.Context context, Upload upload) {
         ServerPlayer player = context.player();
+        MinecraftServer server = context.server();
         byte[] ogg = upload.assembler().bytes();
         if (!upload.sha1().isEmpty() && !SongStore.sha1(ogg).equals(upload.sha1())) {
             fail(player, upload.transfer(), Failure.CORRUPT);
@@ -157,24 +199,52 @@ public final class DiscNetwork {
             fail(player, upload.transfer(), Failure.NO_DISC);
             return;
         }
+        STORE.execute(() -> storeOnDisk(server, player, upload, ogg));
+    }
+
+    /** Runs on the store thread: the whole disk side of an import, in one place and off the tick. */
+    private static void storeOnDisk(MinecraftServer server, ServerPlayer player, Upload upload, byte[] ogg) {
         SongInfo stored;
         try {
             String name = SongStore.allocateName(upload.assembler().name());
             stored = SongStore.write(name, ogg);
+            if (stored == null) {
+                throw new IOException(name + " vanished while it was being written.");
+            }
         } catch (IOException e) {
             AddurDisc.LOGGER.error("Could not store the track uploaded by {}", describe(player), e);
-            fail(player, upload.transfer(), Failure.STORAGE_FAILED);
+            server.execute(() -> fail(player, upload.transfer(), Failure.STORAGE_FAILED));
+            return;
+        }
+        if (!OggVorbis.isPlayableVorbis(SongStore.resolve(stored.name()))) {
+            // A matching digest only proves the bytes are the ones the client sent, not that they
+            // are audio; garbage would otherwise be served to every other player from here.
+            AddurDisc.LOGGER.warn("Rejected the upload from {}: not a playable Ogg Vorbis stream.", describe(player));
+            SongStore.remove(stored.name());
+            server.execute(() -> fail(player, upload.transfer(), Failure.CORRUPT));
             return;
         }
         DiscResources.refresh();
-        held.set(ModInitialize.DISC_SONG, new SongBinding(stored.name(), stored.lengthInSeconds(), upload.title()));
-        player.inventoryMenu.broadcastChanges();
+        server.execute(() -> bindImportedDisc(server, player, upload, stored));
+    }
+
+    /** Runs back on the server thread: the game-state half of a finished import. */
+    private static void bindImportedDisc(MinecraftServer server, ServerPlayer player, Upload upload, SongInfo stored) {
+        ItemStack held = player.getItemInHand(upload.hand());
+        if (held == upload.expectedStack() && held.is(ModInitialize.CUSTOM_DISC)) {
+            held.set(ModInitialize.DISC_SONG, new SongBinding(stored.name(), stored.lengthInSeconds(), upload.title()));
+            player.inventoryMenu.broadcastChanges();
+        } else {
+            // The write took a moment and the disc it was picked for is gone; the track itself is
+            // safely in the library, only the binding is lost.
+            AddurDisc.LOGGER.info("{} imported {} but no longer holds that disc.", describe(player), stored.name());
+        }
         ServerPlayNetworking.send(player, new UploadResult(upload.transfer(), Failure.NONE,
                 stored.name(), stored.lengthInSeconds()));
         AddurDisc.LOGGER.info("{} imported {} ({} bytes).", describe(player), stored.name(), stored.size());
         // The importing client only learned bytes so far; the same announcement it would send to any
         // other player is what lets it keep a local copy of the track.
-        context.server().getPlayerList().getPlayers().forEach(other ->
+        server.getPlayerList().getPlayers().forEach(other ->
                 ServerPlayNetworking.send(other, new SongList(List.of(stored))));
     }
 
@@ -184,12 +254,72 @@ public final class DiscNetwork {
             AddurDisc.LOGGER.warn("{} is asking for tracks faster than a sync should.", describe(player));
             return;
         }
+        if (!DOWNLOADING.add(player.getUUID())) {
+            // One download at a time per player. A well behaved client asks sequentially, so a
+            // second request only ever comes from a modified client, and dropping it is enough.
+            return;
+        }
         SongInfo wanted = find(payload.name());
         if (wanted == null || wanted.size() > ConfigUtil.getMaxSongBytes()) {
+            DOWNLOADING.remove(player.getUUID());
             AddurDisc.LOGGER.warn("{} asked for the unknown track {}.", describe(player), payload.name());
             return;
         }
-        sendTrack(player, wanted);
+        ServerPlayNetworking.send(player, new DownloadStart(wanted.name(), wanted.size(),
+                wanted.sha1(), wanted.lengthInSeconds()));
+        MinecraftServer server = context.server();
+        Util.backgroundExecutor().execute(() -> streamTrack(server, player, wanted));
+    }
+
+    /**
+     * Streams a track off disk from a background thread, paced by the player's download budget, so
+     * neither the server thread nor the network ever has to take a whole song at once. Every packet
+     * goes out through {@code server.execute}, because {@code Connection.send} walks unsynchronised
+     * state and is only safe from the server's own thread; the encoding itself then still happens
+     * on the netty event loop, off both.
+     */
+    private static void streamTrack(MinecraftServer server, ServerPlayer player, SongInfo wanted) {
+        try (InputStream stream = SongStore.open(wanted.name())) {
+            DownloadThrottle throttle = THROTTLES.computeIfAbsent(player.getUUID(), key -> new DownloadThrottle());
+            byte[] buffer = new byte[DiscProtocol.DOWNLOAD_CHUNK_BYTES];
+            long sent = 0;
+            int read;
+            while ((read = stream.read(buffer)) > 0) {
+                if (player.hasDisconnected()) {
+                    // Nobody is listening any more; stop before another read, not after another
+                    // megabyte of packets to a dead connection.
+                    return;
+                }
+                sent += read;
+                final long left = Math.max(wanted.size() - sent, 0);
+                final byte[] chunk = read == buffer.length ? buffer.clone() : Arrays.copyOf(buffer, read);
+                throttle.acquire(chunk.length);
+                server.execute(() -> ServerPlayNetworking.send(player, new DownloadChunk(wanted.name(), chunk, (int) left)));
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            AddurDisc.LOGGER.debug("Stopped streaming {} to {}.", wanted.name(), describe(player));
+        } catch (IOException e) {
+            AddurDisc.LOGGER.warn("Could not send the track {} to {}", wanted.name(), describe(player), e);
+        } finally {
+            DOWNLOADING.remove(player.getUUID());
+        }
+    }
+
+    private static void finishUpload(UUID id) {
+        Upload removed = UPLOADS.remove(id);
+        if (removed != null) {
+            bytesInFlight = Math.max(0, bytesInFlight - removed.assembler().expectedBytes());
+        }
+    }
+
+    private static void fail(ServerPlayer player, UUID transfer, Failure failure) {
+        AddurDisc.LOGGER.warn("Refused an import from {}: {}.", describe(player), failure);
+        ServerPlayNetworking.send(player, new UploadResult(transfer, failure, "", 0));
+    }
+
+    private static String describe(ServerPlayer player) {
+        return player.getScoreboardName();
     }
 
     private static SongInfo find(String name) {
@@ -215,49 +345,39 @@ public final class DiscNetwork {
         return true;
     }
 
-    /**
-     * Streams a track straight off disk. A whole file per player in memory would let a handful of
-     * joins at once cost hundreds of megabytes for no reason.
-     */
-    private static void sendTrack(ServerPlayer player, SongInfo wanted) {
-        ServerPlayNetworking.send(player, new DownloadStart(wanted.name(), wanted.size(),
-                wanted.sha1(), wanted.lengthInSeconds()));
-        byte[] buffer = new byte[DiscProtocol.DOWNLOAD_CHUNK_BYTES];
-        try (InputStream stream = SongStore.open(wanted.name())) {
-            int read;
-            long sent = 0;
-            while ((read = stream.read(buffer)) > 0) {
-                sent += read;
-                long left = Math.max(wanted.size() - sent, 0);
-                byte[] chunk = read == buffer.length ? buffer.clone() : Arrays.copyOf(buffer, read);
-                ServerPlayNetworking.send(player, new DownloadChunk(wanted.name(), chunk, (int) left));
-            }
-        } catch (IOException e) {
-            AddurDisc.LOGGER.warn("Could not send the track {} to {}", wanted.name(), describe(player), e);
-        }
-    }
-
-    private static void finishUpload(UUID id) {
-        Upload removed = UPLOADS.remove(id);
-        if (removed != null) {
-            bytesInFlight = Math.max(0, bytesInFlight - removed.assembler().expectedBytes());
-        }
-    }
-
-    private static void fail(ServerPlayer player, UUID transfer, Failure failure) {
-        AddurDisc.LOGGER.warn("Refused an import from {}: {}.", describe(player), failure);
-        ServerPlayNetworking.send(player, new UploadResult(transfer, failure, "", 0));
-    }
-
-    private static String describe(ServerPlayer player) {
-        return player.getScoreboardName();
-    }
-
     private record Upload(UUID transfer, InteractionHand hand, ItemStack expectedStack, String sha1,
                           String title, ChunkAssembler assembler) {
     }
 
     private record RequestLog(long windowStart, int count) {
+    }
+
+    /**
+     * A per player token bucket: a short burst of downloads goes through at full speed, anything
+     * sustained is limited to {@link #DOWNLOAD_BYTES_PER_SECOND}. The stream pauses inside
+     * {@link #acquire} rather than dropping chunks, which is what keeps the answer complete.
+     */
+    private static final class DownloadThrottle {
+        private long available = DOWNLOAD_BURST_BYTES;
+        private long lastRefillNanos = System.nanoTime();
+
+        synchronized void acquire(long bytes) throws InterruptedException {
+            while (true) {
+                long now = System.nanoTime();
+                long refilled = (now - lastRefillNanos) * DOWNLOAD_BYTES_PER_SECOND / 1_000_000_000L;
+                if (refilled > 0) {
+                    available = Math.min(available + refilled, DOWNLOAD_BURST_BYTES);
+                    lastRefillNanos = now;
+                }
+                if (available >= bytes) {
+                    available -= bytes;
+                    return;
+                }
+                long missing = bytes - available;
+                long waitMillis = Math.max(1L, missing * 1000L / DOWNLOAD_BYTES_PER_SECOND);
+                wait(waitMillis);
+            }
+        }
     }
 
     private DiscNetwork() {

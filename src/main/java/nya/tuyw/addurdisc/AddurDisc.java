@@ -12,7 +12,7 @@ public class AddurDisc implements ModInitializer {
 
     @Override
     public void onInitialize() {
-        new ModInitialize();
+        ModInitialize.init();
         DiscNetwork.register();
     }
 }

@@ -28,9 +28,16 @@ public final class DiscProtocol {
      */
     public static final int SONG_PAGE_SIZE = 64;
 
-    /** Longest track name; matches {@code DiscResources.SOUND_NAME}. */
+    /**
+     * Longest track name, in UTF-8 bytes; matches {@code DiscResources.SOUND_NAME}, which only lets
+     * ASCII through, so bytes and characters are the same number here.
+     */
     public static final int NAME_CHARS = 64;
-    /** Longest player-visible track title. */
+    /**
+     * Longest player-visible track title, in UTF-8 <em>bytes</em> — the unit the packet codec counts.
+     * A Chinese character is three of them, which is why every title is cut by
+     * {@code Utf8.truncate} instead of by a character count.
+     */
     public static final int TITLE_CHARS = 128;
     /** Length of a lowercase hex sha1. */
     public static final int SHA1_CHARS = 40;

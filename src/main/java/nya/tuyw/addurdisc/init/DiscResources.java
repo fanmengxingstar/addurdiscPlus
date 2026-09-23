@@ -95,6 +95,11 @@ public final class DiscResources {
                     continue;
                 }
                 String name = fileName.substring(0, fileName.length() - OG.length());
+                if (name.startsWith("_")) {
+                    // SongStore's in-progress writes and the leftovers of a crashed one; not tracks,
+                    // and telling the player about them every start would only be noise.
+                    continue;
+                }
                 if (isValidName(name)) {
                     names.add(name);
                 } else {

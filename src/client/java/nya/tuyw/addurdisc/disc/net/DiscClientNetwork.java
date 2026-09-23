@@ -39,6 +39,12 @@ public final class DiscClientNetwork {
     /** How long a track may stay silent before the download is written off and tried again. */
     private static final long DOWNLOAD_TIMEOUT_MILLIS = 15_000L;
     private static final int DOWNLOAD_ATTEMPTS = 3;
+    /**
+     * Upload chunks that may leave in one client tick. Sending a whole track at once used to
+     * encode and allocate every packet inside a single frame; a 32 MB import is two thousand
+     * packets, so a per tick budget keeps the client smooth while still finishing in seconds.
+     */
+    private static final int UPLOAD_CHUNKS_PER_TICK = 16;
 
     /**
      * Whoever is watching an import. The import screen claims this while it is open and hands it
@@ -65,6 +71,8 @@ public final class DiscClientNetwork {
     /** Bytes of each transfer still in flight, keyed by transfer so two cannot be mixed up. */
     private static final Map<UUID, byte[]> PENDING_UPLOADS = new HashMap<>();
     private static final Deque<String> WANTED = new ArrayDeque<>();
+    /** Converted tracks waiting for their turn to leave on the wire. */
+    private static final Deque<PendingUpload> OUTBOX = new ArrayDeque<>();
 
     private static ChunkAssembler download;
     /** Track asked for whose {@code DownloadStart} has not arrived yet, or null once it has. */
@@ -80,11 +88,16 @@ public final class DiscClientNetwork {
         ClientPlayNetworking.registerGlobalReceiver(DownloadChunk.TYPE, DiscClientNetwork::onDownloadChunk);
         ClientPlayNetworking.registerGlobalReceiver(PlaySong.TYPE, DiscClientNetwork::onPlaySong);
         // A server that stops answering would otherwise leave this side waiting forever: the queue
-        // would stay full and every later track would quietly never arrive.
-        ClientTickEvents.END_CLIENT_TICK.register(client -> tickDownload());
+        // would stay full and every later track would quietly never arrive. The same tick also
+        // feeds the upload outbox, which is what keeps big imports off the frame budget.
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            tickDownload();
+            tickUpload();
+        });
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             WANTED.clear();
             PENDING_UPLOADS.clear();
+            OUTBOX.clear();
             download = null;
             waitingFor = null;
             deadline = 0L;
@@ -105,19 +118,33 @@ public final class DiscClientNetwork {
     }
 
     /**
-     * Streams a converted track to the server, which owns the sounds folder and the final name.
-     * Runs on the client thread, which is where a payload has to be sent from anyway.
+     * Queues a converted track for the server, which owns the sounds folder and the final name.
+     * The start packet leaves at once; the track itself is metered out by {@link #tickUpload}, so
+     * this frame does not pay for encoding thousands of chunks at once.
      */
     public static void upload(String suggestedName, String title, byte[] ogg, InteractionHand hand) {
         UUID transfer = UUID.randomUUID();
         PENDING_UPLOADS.put(transfer, ogg);
         ClientPlayNetworking.send(new UploadStart(transfer, suggestedName, title, ogg.length,
                 SongStore.sha1(ogg), hand));
-        for (int offset = 0; offset < ogg.length; offset += DiscProtocol.UPLOAD_CHUNK_BYTES) {
-            int end = Math.min(offset + DiscProtocol.UPLOAD_CHUNK_BYTES, ogg.length);
-            ClientPlayNetworking.send(new UploadChunk(transfer, Arrays.copyOfRange(ogg, offset, end)));
-        }
+        OUTBOX.add(new PendingUpload(transfer, ogg));
         say(Component.translatable("addurdisc.screen.uploading"));
+    }
+
+    /** Sends a fixed number of queued upload chunks per client tick. */
+    private static void tickUpload() {
+        int budget = UPLOAD_CHUNKS_PER_TICK;
+        while (budget > 0 && !OUTBOX.isEmpty() && Minecraft.getInstance().player != null) {
+            PendingUpload pending = OUTBOX.peek();
+            int from = pending.offset;
+            int to = Math.min(from + DiscProtocol.UPLOAD_CHUNK_BYTES, pending.data.length);
+            ClientPlayNetworking.send(new UploadChunk(pending.transfer, Arrays.copyOfRange(pending.data, from, to)));
+            pending.offset = to;
+            budget--;
+            if (to >= pending.data.length) {
+                OUTBOX.poll();
+            }
+        }
     }
 
     private static void say(Component message) {
@@ -130,6 +157,9 @@ public final class DiscClientNetwork {
 
     private static void onUploadResult(UploadResult payload, ClientPlayNetworking.Context context) {
         byte[] ownCopy = PENDING_UPLOADS.remove(payload.transfer());
+        // A transfer the server already answered has nothing left to send; the chunks of a refused
+        // one would only be ignored on the far end anyway.
+        OUTBOX.removeIf(pending -> pending.transfer.equals(payload.transfer()));
         if (!payload.success()) {
             warn(Component.translatable(payload.failure().langKey()));
             return;
@@ -294,6 +324,18 @@ public final class DiscClientNetwork {
 
     private static void onPlaySong(PlaySong payload, ClientPlayNetworking.Context context) {
         DiscClientSounds.play(payload.sound(), payload.pos());
+    }
+
+    /** One upload whose bytes have not all left yet; {@code offset} walks as ticks go by. */
+    private static final class PendingUpload {
+        private final UUID transfer;
+        private final byte[] data;
+        private int offset;
+
+        private PendingUpload(UUID transfer, byte[] data) {
+            this.transfer = transfer;
+            this.data = data;
+        }
     }
 
     private DiscClientNetwork() {

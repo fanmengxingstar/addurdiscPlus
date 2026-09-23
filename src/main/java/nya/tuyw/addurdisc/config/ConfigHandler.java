@@ -46,20 +46,27 @@ public final class ConfigHandler {
 
     private static Config load() {
         Config loaded = null;
+        boolean firstRun = false;
         try (Reader reader = Files.newBufferedReader(CONFIG_FILE, StandardCharsets.UTF_8)) {
             loaded = GSON.fromJson(reader, Config.class);
         } catch (NoSuchFileException e) {
+            firstRun = true;
             AddurDisc.LOGGER.debug("No AddurDisc config yet, writing the defaults.");
         } catch (Exception e) {
-            AddurDisc.LOGGER.error("Failed to read the AddurDisc config, using defaults", e);
+            // A broken file is the player's own data: it stays on disk so they can fix it, instead
+            // of being silently overwritten by the defaults, and only the in memory values fall
+            // back. The next edit re-triggers a load through the file stamp either way.
+            AddurDisc.LOGGER.error("Failed to read {}, using defaults without touching the file. Fix or delete it to silence this.", CONFIG_FILE, e);
         }
 
         if (loaded == null) {
             Config defaults = new Config();
-            try (Writer writer = Files.newBufferedWriter(CONFIG_FILE, StandardCharsets.UTF_8)) {
-                GSON.toJson(defaults, writer);
-            } catch (Exception e) {
-                AddurDisc.LOGGER.error("Failed to write the AddurDisc config", e);
+            if (firstRun) {
+                try (Writer writer = Files.newBufferedWriter(CONFIG_FILE, StandardCharsets.UTF_8)) {
+                    GSON.toJson(defaults, writer);
+                } catch (Exception e) {
+                    AddurDisc.LOGGER.error("Failed to write the AddurDisc config", e);
+                }
             }
             return defaults;
         }

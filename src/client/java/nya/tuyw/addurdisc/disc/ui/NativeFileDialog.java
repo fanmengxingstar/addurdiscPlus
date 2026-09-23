@@ -6,9 +6,11 @@ import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.tinyfd.TinyFileDialogs;
 
+import java.awt.EventQueue;
 import java.awt.FileDialog;
 import java.awt.Frame;
 import java.io.File;
+import java.lang.reflect.InvocationTargetException;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.Optional;
@@ -45,20 +47,19 @@ public final class NativeFileDialog {
                 extensions.put(stack.UTF8(filter));
             }
             extensions.flip();
-            // One disc holds one track, so ask for a single result rather than a file list.
-            return TinyFileDialogs.tinyfd_openFileDialog(title, "", extensions, FILTER_DESCRIPTION, true);
+            // One disc holds one track, so ask for a single result — which also means the answer
+            // is the whole path: a file whose own name contains a comma must not be cut at it,
+            // the way a comma separated list from a multi select dialog would be.
+            return TinyFileDialogs.tinyfd_openFileDialog(title, "", extensions, FILTER_DESCRIPTION, false);
         }
     }
 
     private static Optional<Path> toPath(String picked) {
-        // Some platforms still hand back a comma separated list even for a single result.
-        int comma = picked.indexOf(',');
-        String first = (comma < 0 ? picked : picked.substring(0, comma)).strip();
-        if (first.isEmpty()) {
+        if (picked.isBlank()) {
             return Optional.empty();
         }
         try {
-            return Optional.of(Path.of(first));
+            return Optional.of(Path.of(picked));
         } catch (InvalidPathException e) {
             AddurDisc.LOGGER.warn("The file dialog returned an unusable path: {}", picked);
             return Optional.empty();
@@ -66,14 +67,34 @@ public final class NativeFileDialog {
     }
 
     private static Optional<Path> awtDialog(String title) {
-        FileDialog dialog = new FileDialog((Frame) null, title, FileDialog.LOAD);
-        dialog.setFile("*.*");
-        dialog.setVisible(true);
-        String file = dialog.getFile();
-        if (file == null) {
+        try {
+            // The modal dialog lives on the AWT event thread: showing it from any other thread
+            // deadlocks on some platforms, and without always-on-top it opens behind the game
+            // window, where it looks exactly like such a deadlock.
+            FileDialog[] holder = new FileDialog[1];
+            EventQueue.invokeAndWait(() -> {
+                FileDialog dialog = new FileDialog((Frame) null, title, FileDialog.LOAD);
+                dialog.setFile("*.*");
+                dialog.setAlwaysOnTop(true);
+                dialog.setVisible(true);
+                holder[0] = dialog;
+            });
+            FileDialog dialog = holder[0];
+            if (dialog == null) {
+                return Optional.empty();
+            }
+            String file = dialog.getFile();
+            if (file == null) {
+                return Optional.empty();
+            }
+            return Optional.of(new File(dialog.getDirectory(), file).toPath());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return Optional.empty();
+        } catch (InvocationTargetException e) {
+            AddurDisc.LOGGER.debug("The AWT file dialog failed", e);
             return Optional.empty();
         }
-        return Optional.of(new File(dialog.getDirectory(), file).toPath());
     }
 
     private NativeFileDialog() {
