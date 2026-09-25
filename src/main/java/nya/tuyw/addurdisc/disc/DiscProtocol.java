@@ -6,6 +6,9 @@ package nya.tuyw.addurdisc.disc;
  * jukebox in game, which is not where anyone wants to discover it.
  */
 public final class DiscProtocol {
+    /** Largest uncompressed source file accepted for conversion by the server. */
+    public static final long MAX_UPLOAD_SOURCE_BYTES = 200L * 1024 * 1024;
+
     /**
      * Chunk payload size going up. A serverbound custom payload rides an unknown-channel packet, and
      * vanilla caps those at 32767 bytes, so anything larger is dropped or read back wrong. A single

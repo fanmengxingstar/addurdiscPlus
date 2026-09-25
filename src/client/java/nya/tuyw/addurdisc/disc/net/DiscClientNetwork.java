@@ -10,6 +10,8 @@ import nya.tuyw.addurdisc.AddurDisc;
 import nya.tuyw.addurdisc.config.ConfigUtil;
 import nya.tuyw.addurdisc.disc.DiscClientSounds;
 import nya.tuyw.addurdisc.disc.DiscProtocol;
+import nya.tuyw.addurdisc.disc.audio.ImportFailedException;
+import nya.tuyw.addurdisc.disc.audio.TrackMetadata;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.DownloadChunk;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.DownloadStart;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.PlaySong;
@@ -24,16 +26,17 @@ import nya.tuyw.addurdisc.disc.store.SongStore;
 import nya.tuyw.addurdisc.init.DiscResources;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Deque;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
 /**
- * Client half of the disc protocol: uploads what it converted, pulls whatever the server has that it
- * does not, and reloads the generated pack once a track is in place.
+ * Client half of the disc protocol: uploads source media for server conversion, pulls what it does
+ * not have, and reloads the generated pack once a track is in place.
  */
 public final class DiscClientNetwork {
     /** How long a track may stay silent before the download is written off and tried again. */
@@ -68,10 +71,8 @@ public final class DiscClientNetwork {
 
     private static ImportListener listener = IDLE;
 
-    /** Bytes of each transfer still in flight, keyed by transfer so two cannot be mixed up. */
-    private static final Map<UUID, byte[]> PENDING_UPLOADS = new HashMap<>();
     private static final Deque<String> WANTED = new ArrayDeque<>();
-    /** Converted tracks waiting for their turn to leave on the wire. */
+    /** Source files waiting for their turn to leave on the wire. */
     private static final Deque<PendingUpload> OUTBOX = new ArrayDeque<>();
 
     private static ChunkAssembler download;
@@ -96,7 +97,6 @@ public final class DiscClientNetwork {
         });
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             WANTED.clear();
-            PENDING_UPLOADS.clear();
             OUTBOX.clear();
             download = null;
             waitingFor = null;
@@ -117,17 +117,35 @@ public final class DiscClientNetwork {
         }
     }
 
-    /**
-     * Queues a converted track for the server, which owns the sounds folder and the final name.
-     * The start packet leaves at once; the track itself is metered out by {@link #tickUpload}, so
-     * this frame does not pay for encoding thousands of chunks at once.
-     */
-    public static void upload(String suggestedName, String title, byte[] ogg, InteractionHand hand) {
+    /** Reads and hashes the picked source off-thread; the server performs the audio conversion. */
+    public static void upload(Path source, InteractionHand hand) throws IOException, ImportFailedException {
+        long size = Files.isRegularFile(source) ? Files.size(source) : 0L;
+        if (size <= 0L) {
+            throw new ImportFailedException(source.getFileName() + " does not exist or is empty.");
+        }
+        if (size > DiscProtocol.MAX_UPLOAD_SOURCE_BYTES) {
+            throw new ImportFailedException(ImportFailedException.TOO_LARGE_KEY,
+                    String.format("%.1f MB is larger than the %d MB source limit.",
+                            size / (1024.0 * 1024.0), DiscProtocol.MAX_UPLOAD_SOURCE_BYTES / (1024 * 1024)));
+        }
+        byte[] sourceBytes = Files.readAllBytes(source);
+        if (sourceBytes.length != size) {
+            throw new IOException("The selected file changed while it was being read.");
+        }
+        String fileName = source.getFileName().toString();
+        String suggestedName = TrackMetadata.suggestedName(fileName);
+        String title = TrackMetadata.title(fileName);
+        String sha1 = SongStore.sha1(sourceBytes);
+        Minecraft.getInstance().executeIfPossible(() -> queueUpload(
+                suggestedName, title, sourceBytes, sha1, hand));
+    }
+
+    private static void queueUpload(String suggestedName, String title, byte[] source, String sha1,
+                                    InteractionHand hand) {
         UUID transfer = UUID.randomUUID();
-        PENDING_UPLOADS.put(transfer, ogg);
-        ClientPlayNetworking.send(new UploadStart(transfer, suggestedName, title, ogg.length,
-                SongStore.sha1(ogg), hand));
-        OUTBOX.add(new PendingUpload(transfer, ogg));
+        ClientPlayNetworking.send(new UploadStart(transfer, suggestedName, title, source.length,
+                sha1, hand));
+        OUTBOX.add(new PendingUpload(transfer, source));
         say(Component.translatable("addurdisc.screen.uploading"));
     }
 
@@ -156,7 +174,6 @@ public final class DiscClientNetwork {
     }
 
     private static void onUploadResult(UploadResult payload, ClientPlayNetworking.Context context) {
-        byte[] ownCopy = PENDING_UPLOADS.remove(payload.transfer());
         // A transfer the server already answered has nothing left to send; the chunks of a refused
         // one would only be ignored on the far end anyway.
         OUTBOX.removeIf(pending -> pending.transfer.equals(payload.transfer()));
@@ -164,27 +181,10 @@ public final class DiscClientNetwork {
             warn(Component.translatable(payload.failure().langKey()));
             return;
         }
-        keepLocalCopy(payload.name(), ownCopy);
         DiscResources.refresh();
         reload();
         tellPlayer(Component.translatable("addurdisc.screen.imported"));
         listener.onImported();
-    }
-
-    /**
-     * Holds on to the track this side converted. A local server wrote into this very folder, so the
-     * file is already here; on a remote one the bytes we just sent are the track, and keeping them
-     * saves downloading them back.
-     */
-    private static void keepLocalCopy(String name, byte[] ownCopy) {
-        if (ownCopy == null || SongStore.exists(name)) {
-            return;
-        }
-        try {
-            SongStore.write(name, ownCopy);
-        } catch (IOException e) {
-            AddurDisc.LOGGER.error("Could not keep a local copy of {}", name, e);
-        }
     }
 
     /** Says something in the chat, which like the disc itself outlives the import screen. */

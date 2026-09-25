@@ -3,9 +3,6 @@ package nya.tuyw.addurdisc.disc.audio;
 import nya.tuyw.addurdisc.AddurDisc;
 import nya.tuyw.addurdisc.config.ConfigUtil;
 import nya.tuyw.addurdisc.disc.DiscProtocol;
-import nya.tuyw.addurdisc.init.DiscResources;
-import nya.tuyw.addurdisc.util.Utf8;
-
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -13,22 +10,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
-import java.text.Normalizer;
 
 /**
- * Turns whatever the player picked into the mono Ogg Vorbis stream a music disc needs.
+ * Converts an uploaded source into the mono Ogg Vorbis stream a music disc needs.
  *
  * <p>Minecraft ships no Vorbis encoder, so the conversion is delegated to ffmpeg. The result is
  * returned as bytes instead of being written to the sounds folder: the server owns that folder and
  * the final file name, so even a local import goes through the same upload path.</p>
  */
 public final class AudioImporter {
-    /**
-     * Largest input file the converter accepts. Only its size is read on this side — ffmpeg opens
-     * the file itself — but the converted result is held in memory, so an absurd input is still
-     * worth turning away before ffmpeg spends minutes on it.
-     */
-    public static final long MAX_SOURCE_BYTES = 200L * 1024 * 1024;
     /** libvorbis quality mode; 4 is roughly 128 kbps, transparent enough for a music disc. */
     private static final String VORBIS_QUALITY = "4";
     private static final long TIMEOUT_SECONDS = 180;
@@ -40,21 +30,17 @@ public final class AudioImporter {
     public record Converted(String suggestedName, String title, byte[] ogg) {
     }
 
-    /** @return whether the configured ffmpeg can actually be executed */
-    public static boolean isAvailable() {
-        return resolveExecutable() != null;
-    }
-
-    public static Converted convertFile(Path source) throws ImportFailedException, InterruptedException {
+    public static Converted convertFile(Path source, String suggestedName, String title)
+            throws ImportFailedException, InterruptedException {
         long size = sizeOf(source);
         if (size == 0) {
             throw new ImportFailedException(source.getFileName() + " does not exist or is empty.");
         }
-        if (size > MAX_SOURCE_BYTES) {
-            throw new ImportFailedException(tooLarge(size, MAX_SOURCE_BYTES));
+        if (size > DiscProtocol.MAX_UPLOAD_SOURCE_BYTES) {
+            throw new ImportFailedException(ImportFailedException.TOO_LARGE_KEY,
+                    tooLarge(size, DiscProtocol.MAX_UPLOAD_SOURCE_BYTES));
         }
-        String fileName = source.getFileName().toString();
-        return new Converted(suggestedName(fileName), title(fileName), run(source));
+        return new Converted(suggestedName, title, run(source));
     }
 
     /**
@@ -114,8 +100,8 @@ public final class AudioImporter {
     private static byte[] run(Path source) throws ImportFailedException, InterruptedException {
         Path executable = resolveExecutable();
         if (executable == null) {
-            throw new ImportFailedException("addurdisc.message.no_ffmpeg",
-                    ConfigUtil.getFfmpegCommand() + " was not found on this computer.");
+            throw new ImportFailedException("addurdisc.upload.conversion_failed",
+                    ConfigUtil.getFfmpegCommand() + " was not found on the server.");
         }
         Path output;
         try {
@@ -140,9 +126,15 @@ public final class AudioImporter {
             builder.redirectError(ProcessBuilder.Redirect.to(log.toFile()));
             builder.redirectOutput(ProcessBuilder.Redirect.DISCARD);
             Process process = builder.start();
-            if (!process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            try {
+                if (!process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                    process.destroyForcibly();
+                    throw new ImportFailedException("ffmpeg did not finish within " + TIMEOUT_SECONDS + "s.");
+                }
+            } catch (InterruptedException e) {
                 process.destroyForcibly();
-                throw new ImportFailedException("ffmpeg did not finish within " + TIMEOUT_SECONDS + "s.");
+                Thread.currentThread().interrupt();
+                throw e;
             }
             if (process.exitValue() != 0) {
                 throw new ImportFailedException(describeFailure(source, log, process.exitValue()));
@@ -153,7 +145,8 @@ public final class AudioImporter {
             }
             long maxSongBytes = ConfigUtil.getMaxSongBytes();
             if (ogg.length > maxSongBytes) {
-                throw new ImportFailedException(tooLarge(ogg.length, maxSongBytes));
+                throw new ImportFailedException(ImportFailedException.TOO_LARGE_KEY,
+                        tooLarge(ogg.length, maxSongBytes));
             }
             AddurDisc.LOGGER.debug("Converted {} to a {} byte mono ogg.", source.getFileName(), ogg.length);
             return ogg;
@@ -187,84 +180,6 @@ public final class AudioImporter {
     /**
      * Strips the extension from a picked file name and makes it a legal track name.
      */
-    static String suggestedName(String fileName) {
-        String base = fileName;
-        String extension = extensionOf(fileName);
-        if (!extension.isEmpty()) {
-            base = base.substring(0, base.length() - extension.length() - 1);
-        }
-        StringBuilder name = new StringBuilder(base.length());
-        for (char c : Normalizer.normalize(base, Normalizer.Form.NFD).replaceAll("\\p{M}+", "").toLowerCase(Locale.ROOT).toCharArray()) {
-            boolean legal = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
-            if (legal) {
-                name.append(c);
-            } else if (name.length() > 0 && name.charAt(name.length() - 1) != '_') {
-                name.append('_');
-            }
-        }
-        trimSeparators(name);
-        if (name.length() > 48) {
-            name.setLength(48);
-            trimSeparators(name);
-        }
-        // Names of fully non-latin files collapse to nothing, and a name built from the original
-        // keeps two different imports apart instead of piling up behind one "song".
-        if (name.length() == 0) {
-            name.append("disc-").append(shortHash(fileName));
-        }
-        String candidate = name.toString();
-        return DiscResources.isValidName(candidate) ? candidate : "disc-" + shortHash(fileName);
-    }
-
-    /**
-     * @return the picked file name as the player wrote it, less the extension and any control
-     * characters, which is what the disc is called. Bounded in characters and then in UTF-8 bytes,
-     * because other players read it over the network and a Chinese name costs three bytes per
-     * character: 64 of them would be a third over what the title codec accepts.
-     */
-    static String title(String fileName) {
-        String extension = extensionOf(fileName);
-        String base = extension.isEmpty() ? fileName : fileName.substring(0, fileName.length() - extension.length() - 1);
-        String flat = base.replaceAll("\\p{Cntrl}", " ").strip();
-        String capped = flat.length() <= 64 ? flat : flat.substring(0, 64).strip();
-        return Utf8.truncate(capped, DiscProtocol.TITLE_CHARS);
-    }
-
-    private static void trimSeparators(StringBuilder name) {
-        int end = name.length();
-        while (end > 0 && (name.charAt(end - 1) == '.' || name.charAt(end - 1) == '_' || name.charAt(end - 1) == '-')) {
-            end--;
-        }
-        name.setLength(end);
-        int start = 0;
-        while (start < name.length() && (name.charAt(start) == '.' || name.charAt(start) == '_' || name.charAt(start) == '-')) {
-            start++;
-        }
-        name.delete(0, start);
-    }
-
-    private static String shortHash(String value) {
-        try {
-            byte[] digest = java.security.MessageDigest.getInstance("SHA-1").digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            StringBuilder hex = new StringBuilder();
-            for (int i = 0; i < 4; i++) {
-                hex.append(String.format("%02x", digest[i]));
-            }
-            return hex.toString();
-        } catch (java.security.NoSuchAlgorithmException e) {
-            return Integer.toHexString(value.hashCode());
-        }
-    }
-
-    private static String extensionOf(String fileName) {
-        int dot = fileName.lastIndexOf('.');
-        if (dot < 0 || dot == fileName.length() - 1) {
-            return "";
-        }
-        String extension = fileName.substring(dot + 1).toLowerCase(Locale.ROOT);
-        return extension.matches("[a-z0-9]{1,8}") ? extension : "";
-    }
-
     private static long sizeOf(Path file) {
         try {
             return Files.isRegularFile(file) ? Files.size(file) : 0;

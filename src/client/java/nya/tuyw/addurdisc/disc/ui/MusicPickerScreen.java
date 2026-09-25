@@ -9,7 +9,6 @@ import net.minecraft.util.CommonColors;
 import net.minecraft.util.Util;
 import net.minecraft.world.InteractionHand;
 import nya.tuyw.addurdisc.AddurDisc;
-import nya.tuyw.addurdisc.disc.audio.AudioImporter;
 import nya.tuyw.addurdisc.disc.audio.ImportFailedException;
 import nya.tuyw.addurdisc.disc.net.DiscClientNetwork;
 
@@ -18,10 +17,10 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * The screen a blank disc opens: it hands the player an operating system file chooser, converts
- * whatever they pick, and leaves the result to {@link DiscClientNetwork}.
+ * The screen a blank disc opens: it hands the player an operating system file chooser, then uploads
+ * their selection for server-side conversion through {@link DiscClientNetwork}.
  *
- * <p>The chooser is asynchronous; conversion runs on the shared io pool and reports back
+ * <p>The chooser is asynchronous; file reading and hashing run on the shared io pool and report back
  * through {@link net.minecraft.client.Minecraft#executeIfPossible}. The layout follows the same idea
  * as camerapture's upload screen: a title, one line of status, an underlined browse link, and the
  * whole window accepting a dropped file.</p>
@@ -30,7 +29,7 @@ public class MusicPickerScreen extends Screen implements DiscClientNetwork.Impor
     private final InteractionHand hand;
     private Component message = Component.translatable("addurdisc.screen.hint");
     private boolean failed;
-    /** True while the file chooser or ffmpeg is busy, which keeps the player from starting twice. */
+    /** True while the file chooser or source upload is being prepared. */
     private boolean busy;
 
     public MusicPickerScreen(InteractionHand hand) {
@@ -85,7 +84,7 @@ public class MusicPickerScreen extends Screen implements DiscClientNetwork.Impor
             return;
         }
         Path picked = paths.get(0);
-        runAsync("conversion", () -> convert(picked));
+        runAsync("upload preparation", () -> uploadSource(picked));
     }
 
     /** An import keeps the world running; pausing to browse a folder would only annoy the player. */
@@ -105,7 +104,7 @@ public class MusicPickerScreen extends Screen implements DiscClientNetwork.Impor
             } else if (picked.isEmpty()) {
                 finish(Component.translatable("addurdisc.screen.hint"), false);
             } else {
-                runAsync("conversion", () -> convert(picked.get()));
+                runAsync("upload preparation", () -> uploadSource(picked.get()));
             }
         });
     }
@@ -137,26 +136,21 @@ public class MusicPickerScreen extends Screen implements DiscClientNetwork.Impor
         void run() throws Exception;
     }
 
-    private void convert(Path source) throws InterruptedException {
+    private void uploadSource(Path source) {
         try {
-            AudioImporter.Converted converted = AudioImporter.convertFile(source);
-            minecraft.executeIfPossible(() -> {
-                busy = false;
-                DiscClientNetwork.upload(converted.suggestedName(), converted.title(), converted.ogg(), hand);
-            });
-        } catch (ImportFailedException e) {
+            DiscClientNetwork.upload(source, hand);
+            finish(Component.translatable("addurdisc.screen.uploading"), false);
+        } catch (ImportFailedException | java.io.IOException e) {
             AddurDisc.LOGGER.warn("Could not import {}: {}", source.getFileName(), e.getMessage());
-            finish(e.toComponent(), true);
+            finish(e instanceof ImportFailedException importFailed
+                    ? importFailed.toComponent()
+                    : new ImportFailedException(String.valueOf(e.getMessage())).toComponent(), true);
         }
     }
 
-    /** @return false when a pick is already in flight or the converter is missing */
+    /** @return false when a pick or upload is already in flight */
     private boolean beginWork() {
         if (busy) {
-            return false;
-        }
-        if (!AudioImporter.isAvailable()) {
-            show(Component.translatable("addurdisc.message.no_ffmpeg"), true);
             return false;
         }
         busy = true;

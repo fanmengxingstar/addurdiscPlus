@@ -9,6 +9,8 @@ import net.minecraft.network.chat.Component;
  * {@link #getMessage()} keeps the raw detail for the log.</p>
  */
 public class ImportFailedException extends Exception {
+    public static final String TOO_LARGE_KEY = "addurdisc.upload.too_large";
+
     /** Used when the failure has no dedicated message of its own. */
     public static final String GENERIC_KEY = "addurdisc.screen.failed";
 

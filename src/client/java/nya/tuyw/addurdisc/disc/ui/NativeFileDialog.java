@@ -28,7 +28,7 @@ import static org.lwjgl.system.MemoryUtil.*;
  * fallback uses its own event thread. Neither implementation waits on the game thread.</p>
  */
 public final class NativeFileDialog {
-    /** Filter shown in the chooser. ffmpeg reads far more than this, but these are what we promise. */
+    /** Filter shown in the chooser; ffmpeg on the server can read more formats than these. */
     private static final String FILTERS = "mp3;wav;ogg;flac;m4a;aac;opus;mp4;mkv;webm;avi;mov";
     private static final String FILTER_DESCRIPTION = "Music and video";
 

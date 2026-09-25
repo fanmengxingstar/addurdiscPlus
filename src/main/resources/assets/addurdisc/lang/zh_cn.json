@@ -6,11 +6,10 @@
   "addurdisc.screen.hint": "把文件拖拽到窗口任意位置，或者",
   "addurdisc.screen.browse": "点击浏览文件",
   "addurdisc.screen.supported": "支持 mp3 / wav / ogg，含视频的文件也可以——只保留其中的音频",
-  "addurdisc.screen.processing": "正在转换为单声道 OGG……",
+  "addurdisc.screen.processing": "正在准备上传音频文件……",
   "addurdisc.screen.imported": "导入完成！唱片已可以使用。",
   "addurdisc.screen.failed": "导入失败：",
   "addurdisc.screen.uploading": "正在上传到服务器……",
-  "addurdisc.message.no_ffmpeg": "未找到 ffmpeg。请安装它，或在 config/AddurDisc-common.json 中设置 \"ffmpegPath\"。",
   "addurdisc.message.denied": "需要管理员权限才能向该服务器上传音乐。",
   "addurdisc.message.sync_started": "正在从服务器同步音乐文件……",
   "addurdisc.message.sync_done": "音乐唱片同步完成。",
@@ -20,7 +19,8 @@
   "addurdisc.upload.no_disc": "请把空白唱片拿在导入时用的那只手上，再试一次。",
   "addurdisc.upload.store_full": "服务器的音乐存储空间已满。",
   "addurdisc.upload.too_many_tracks": "服务器的音乐数量已达上限。",
-  "addurdisc.upload.corrupt": "转换后的音频在传输中损坏，请重新导入。",
+  "addurdisc.upload.corrupt": "上传的音频文件在传输中损坏，请重新导入。",
   "addurdisc.upload.storage_failed": "服务器无法保存这首曲子。",
-  "addurdisc.upload.busy": "服务器还在处理另一个上传，请稍后再试。"
+  "addurdisc.upload.busy": "服务器还在处理另一个上传，请稍后再试。",
+  "addurdisc.upload.conversion_failed": "服务器无法将此文件转换为可播放音频。"
 }

@@ -6,11 +6,10 @@
   "addurdisc.screen.hint": "Drop a file anywhere in this window, or",
   "addurdisc.screen.browse": "browse for a file",
   "addurdisc.screen.supported": "mp3 / wav / ogg, video files are accepted too - only their audio is kept",
-  "addurdisc.screen.processing": "Converting to mono OGG...",
+  "addurdisc.screen.processing": "Preparing the audio file for upload...",
   "addurdisc.screen.imported": "Imported! The disc is ready to play.",
   "addurdisc.screen.failed": "Import failed: ",
   "addurdisc.screen.uploading": "Uploading to the server...",
-  "addurdisc.message.no_ffmpeg": "ffmpeg was not found. Install it, or set \"ffmpegPath\" in config/AddurDisc-common.json.",
   "addurdisc.message.denied": "You need operator permission to upload music to this server.",
   "addurdisc.message.sync_started": "Syncing music discs from the server...",
   "addurdisc.message.sync_done": "Music discs synced.",
@@ -20,7 +19,8 @@
   "addurdisc.upload.no_disc": "Hold the blank disc in the hand you imported with, then try again.",
   "addurdisc.upload.store_full": "This server's music storage is full.",
   "addurdisc.upload.too_many_tracks": "This server already holds as many tracks as it allows.",
-  "addurdisc.upload.corrupt": "The converted track arrived damaged. Try importing it again.",
+  "addurdisc.upload.corrupt": "The uploaded audio file arrived damaged. Try importing it again.",
   "addurdisc.upload.storage_failed": "The server could not store that track.",
-  "addurdisc.upload.busy": "The server is still busy with another upload. Try again in a moment."
+  "addurdisc.upload.busy": "The server is still busy with another upload. Try again in a moment.",
+  "addurdisc.upload.conversion_failed": "The server could not convert that file into playable audio."
 }

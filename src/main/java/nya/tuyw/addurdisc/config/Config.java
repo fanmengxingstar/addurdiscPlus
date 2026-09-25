@@ -15,6 +15,7 @@ public class Config {
     /**
      * Executable used to convert imported music to mono OGG. Leave it empty to
      * look "ffmpeg" up on PATH, or give the full path, e.g. "C:/ffmpeg/bin/ffmpeg.exe".
+     * This setting is read by the server when a player imports a track.
      */
     public String ffmpegPath = "";
     /** Largest single track the server stores, in megabytes. */

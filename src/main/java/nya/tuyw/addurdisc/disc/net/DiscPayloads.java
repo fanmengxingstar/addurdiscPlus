@@ -40,7 +40,8 @@ public final class DiscPayloads {
         TOO_MANY_TRACKS("addurdisc.upload.too_many_tracks"),
         CORRUPT("addurdisc.upload.corrupt"),
         STORAGE_FAILED("addurdisc.upload.storage_failed"),
-        BUSY("addurdisc.upload.busy");
+        BUSY("addurdisc.upload.busy"),
+        CONVERSION_FAILED("addurdisc.upload.conversion_failed");
 
         private static final Failure[] BY_ID = values();
 
@@ -75,7 +76,7 @@ public final class DiscPayloads {
         return ByteBufCodecs.collection(ArrayList::new, SongInfo.STREAM_CODEC, DiscProtocol.SONG_PAGE_SIZE);
     }
 
-    /** Client asks the server to take a converted track; {@code hand} is the disc to bind it to. */
+    /** Client asks the server to import a source file; {@code hand} is the disc to bind it to. */
     public record UploadStart(UUID transfer, String suggestedName, String title, long size, String sha1, InteractionHand hand)
             implements CustomPacketPayload {
         public UploadStart {
@@ -99,7 +100,7 @@ public final class DiscPayloads {
         }
     }
 
-    /** Client sends the converted ogg in order; the last chunk closes the transfer. */
+    /** Client sends the source file in order; the last chunk closes the transfer. */
     public record UploadChunk(UUID transfer, byte[] bytes) implements CustomPacketPayload {
         public UploadChunk {
             if (bytes == null) bytes = new byte[0];

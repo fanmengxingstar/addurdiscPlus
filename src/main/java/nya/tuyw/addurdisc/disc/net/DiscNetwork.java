@@ -12,6 +12,8 @@ import nya.tuyw.addurdisc.AddurDisc;
 import nya.tuyw.addurdisc.config.ConfigUtil;
 import nya.tuyw.addurdisc.disc.DiscProtocol;
 import nya.tuyw.addurdisc.disc.SongBinding;
+import nya.tuyw.addurdisc.disc.audio.AudioImporter;
+import nya.tuyw.addurdisc.disc.audio.ImportFailedException;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.DownloadChunk;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.DownloadStart;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.Failure;
@@ -21,15 +23,17 @@ import nya.tuyw.addurdisc.disc.net.DiscPayloads.SongList;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.UploadChunk;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.UploadResult;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.UploadStart;
-import nya.tuyw.addurdisc.disc.store.ChunkAssembler;
 import nya.tuyw.addurdisc.disc.store.SongInfo;
 import nya.tuyw.addurdisc.disc.store.SongStore;
+import nya.tuyw.addurdisc.disc.store.UploadAssembler;
 import nya.tuyw.addurdisc.init.DiscResources;
 import nya.tuyw.addurdisc.init.ModInitialize;
 import nya.tuyw.addurdisc.util.OggVorbis;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -53,8 +57,8 @@ import java.util.concurrent.Executors;
  * thread.</p>
  */
 public final class DiscNetwork {
-    /** Bytes every open upload together is allowed to hold in memory. */
-    private static final long UPLOAD_BUDGET = 64L * 1024 * 1024;
+    /** Maximum disk space reserved for incomplete source uploads. */
+    private static final long UPLOAD_BUDGET = DiscProtocol.MAX_UPLOAD_SOURCE_BYTES;
     /** How often one player may pull a track; a client asks once per missing song. */
     private static final int REQUESTS_PER_SECOND = 8;
     private static final long REQUEST_WINDOW_MILLIS = 1000L;
@@ -124,9 +128,12 @@ public final class DiscNetwork {
         if (!ServerPlayNetworking.canSend(player, UploadResult.TYPE)
                 || !DiscResources.isValidName(payload.suggestedName())
                 || payload.title() == null || payload.title().length() > DiscProtocol.TITLE_CHARS
-                || payload.size() <= 0 || payload.size() > ConfigUtil.getMaxSongBytes()
-                || payload.sha1() == null || (!payload.sha1().isEmpty() && !payload.sha1().matches("[0-9a-fA-F]{40}"))) {
+                || payload.sha1() == null || !payload.sha1().matches("[0-9a-fA-F]{40}")) {
             fail(player, payload.transfer(), Failure.CORRUPT);
+            return;
+        }
+        if (payload.size() <= 0 || payload.size() > DiscProtocol.MAX_UPLOAD_SOURCE_BYTES) {
+            fail(player, payload.transfer(), Failure.TOO_LARGE);
             return;
         }
         UUID id = player.getUUID();
@@ -141,26 +148,23 @@ public final class DiscNetwork {
             fail(player, payload.transfer(), Failure.NO_DISC);
             return;
         }
-        if (payload.size() <= 0 || payload.size() > ConfigUtil.getMaxSongBytes()) {
-            fail(player, payload.transfer(), Failure.TOO_LARGE);
-            return;
-        }
         if (SongStore.count() >= ConfigUtil.getMaxTracks()) {
             fail(player, payload.transfer(), Failure.TOO_MANY_TRACKS);
-            return;
-        }
-        long free = Math.max(0L, ConfigUtil.getMaxStoreBytes() - SongStore.totalBytes());
-        if (payload.size() > free) {
-            fail(player, payload.transfer(), Failure.STORE_FULL);
             return;
         }
         if (payload.size() > UPLOAD_BUDGET - bytesInFlight) {
             fail(player, payload.transfer(), Failure.BUSY);
             return;
         }
-        bytesInFlight += payload.size();
-        UPLOADS.put(id, new Upload(payload.transfer(), payload.hand(), player.getItemInHand(payload.hand()),
-                payload.sha1(), payload.title(), new ChunkAssembler(payload.suggestedName(), payload.size())));
+        try {
+            UploadAssembler assembler = new UploadAssembler(payload.suggestedName(), payload.size());
+            bytesInFlight += payload.size();
+            UPLOADS.put(id, new Upload(payload.transfer(), payload.hand(), player.getItemInHand(payload.hand()),
+                    payload.sha1(), payload.title(), assembler));
+        } catch (IOException e) {
+            AddurDisc.LOGGER.warn("Could not create a temporary upload for {}", describe(player), e);
+            fail(player, payload.transfer(), Failure.STORAGE_FAILED);
+        }
     }
 
     /** @return whether the hand still holds a disc, which is the stack an import would bind to */
@@ -176,21 +180,37 @@ public final class DiscNetwork {
             // Chunks of a transfer that was replaced or already finished. Nothing to answer.
             return;
         }
-        if (!upload.assembler().accept(payload.bytes())) {
+        try {
+            if (!upload.assembler().accept(payload.bytes())) {
+                finishUpload(id);
+                fail(player, payload.transfer(), Failure.CORRUPT);
+                return;
+            }
+        } catch (IOException e) {
             finishUpload(id);
-            fail(player, payload.transfer(), Failure.CORRUPT);
+            AddurDisc.LOGGER.error("Could not receive the upload from {}", describe(player), e);
+            fail(player, payload.transfer(), Failure.STORAGE_FAILED);
             return;
         }
         if (!upload.assembler().isComplete()) {
             return;
         }
-        finishUpload(id);
+        // Keep the size reservation through conversion so a busy store thread cannot accumulate
+        // an unbounded pile of source files on disk.
+        UPLOADS.remove(id);
         try {
-            store(context, upload);
+            store(context, upload, upload.assembler().finish());
         } catch (RuntimeException e) {
             // The client is waiting for an answer either way, and a screen stuck on "uploading"
             // gives no clue why.
             AddurDisc.LOGGER.error("Could not finish the import from {}.", describe(player), e);
+            closeUpload(upload);
+            releaseUploadBudget(upload);
+            fail(player, upload.transfer(), Failure.STORAGE_FAILED);
+        } catch (IOException e) {
+            AddurDisc.LOGGER.error("Could not finish receiving the upload from {}.", describe(player), e);
+            closeUpload(upload);
+            releaseUploadBudget(upload);
             fail(player, upload.transfer(), Failure.STORAGE_FAILED);
         }
     }
@@ -200,36 +220,46 @@ public final class DiscNetwork {
      * thread. The track binds to the disc only once it is safely on disk, back on the server
      * thread, where the hand check runs again for the same reason it always did.
      */
-    private static void store(ServerPlayNetworking.Context context, Upload upload) {
+    private static void store(ServerPlayNetworking.Context context, Upload upload, Path source) {
         ServerPlayer player = context.player();
         MinecraftServer server = context.server();
-        byte[] ogg = upload.assembler().bytes();
-        if (!upload.sha1().isEmpty() && !SongStore.sha1(ogg).equals(upload.sha1())) {
-            fail(player, upload.transfer(), Failure.CORRUPT);
-            return;
-        }
         // The hand is re-read because a transfer takes seconds and the player could have switched
         // stacks meanwhile; the identity check is what stops the track landing on whatever is being
         // held now instead of on the disc the file was picked for.
         ItemStack held = player.getItemInHand(upload.hand());
         if (held != upload.expectedStack() || !held.is(ModInitialize.CUSTOM_DISC)) {
+            deleteSource(source);
+            releaseUploadBudget(upload);
             fail(player, upload.transfer(), Failure.NO_DISC);
             return;
         }
-        STORE.execute(() -> storeOnDisk(server, player, upload, ogg));
+        STORE.execute(() -> storeOnDisk(server, player, upload, source));
     }
 
-    /** Runs on the store thread: the whole disk side of an import, in one place and off the tick. */
-    private static void storeOnDisk(MinecraftServer server, ServerPlayer player, Upload upload, byte[] ogg) {
+    /** Runs conversion and storage off the server tick. */
+    private static void storeOnDisk(MinecraftServer server, ServerPlayer player, Upload upload, Path source) {
         SongInfo stored;
         try {
-            if (SongStore.count() >= ConfigUtil.getMaxTracks()
-                    || ogg.length > ConfigUtil.getMaxSongBytes()
-                    || ogg.length > Math.max(0L, ConfigUtil.getMaxStoreBytes() - SongStore.totalBytes())) {
+            if (!SongStore.sha1(source).equals(upload.sha1())) {
+                server.execute(() -> fail(player, upload.transfer(), Failure.CORRUPT));
+                return;
+            }
+            AudioImporter.Converted converted = AudioImporter.convertFile(source,
+                    upload.assembler().name(), upload.title());
+            byte[] ogg = converted.ogg();
+            if (ogg.length > ConfigUtil.getMaxSongBytes()) {
+                server.execute(() -> fail(player, upload.transfer(), Failure.TOO_LARGE));
+                return;
+            }
+            if (SongStore.count() >= ConfigUtil.getMaxTracks()) {
+                server.execute(() -> fail(player, upload.transfer(), Failure.TOO_MANY_TRACKS));
+                return;
+            }
+            if (ogg.length > Math.max(0L, ConfigUtil.getMaxStoreBytes() - SongStore.totalBytes())) {
                 server.execute(() -> fail(player, upload.transfer(), Failure.STORE_FULL));
                 return;
             }
-            String name = SongStore.allocateName(upload.assembler().name());
+            String name = SongStore.allocateName(converted.suggestedName());
             stored = SongStore.write(name, ogg);
             if (stored == null) {
                 throw new IOException(name + " vanished while it was being written.");
@@ -238,6 +268,20 @@ public final class DiscNetwork {
             AddurDisc.LOGGER.error("Could not store the track uploaded by {}", describe(player), e);
             server.execute(() -> fail(player, upload.transfer(), Failure.STORAGE_FAILED));
             return;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            AddurDisc.LOGGER.warn("Conversion was interrupted for an upload from {}.", describe(player));
+            server.execute(() -> fail(player, upload.transfer(), Failure.CONVERSION_FAILED));
+            return;
+        } catch (ImportFailedException e) {
+            AddurDisc.LOGGER.warn("Could not convert the upload from {}: {}", describe(player), e.getMessage());
+            Failure failure = ImportFailedException.TOO_LARGE_KEY.equals(e.key())
+                    ? Failure.TOO_LARGE : Failure.CONVERSION_FAILED;
+            server.execute(() -> fail(player, upload.transfer(), failure));
+            return;
+        } finally {
+            deleteSource(source);
+            server.execute(() -> releaseUploadBudget(upload));
         }
         if (!OggVorbis.isPlayableVorbis(SongStore.resolve(stored.name()))) {
             // A matching digest only proves the bytes are the ones the client sent, not that they
@@ -334,7 +378,28 @@ public final class DiscNetwork {
     private static void finishUpload(UUID id) {
         Upload removed = UPLOADS.remove(id);
         if (removed != null) {
-            bytesInFlight = Math.max(0, bytesInFlight - removed.assembler().expectedBytes());
+            releaseUploadBudget(removed);
+            closeUpload(removed);
+        }
+    }
+
+    private static void releaseUploadBudget(Upload upload) {
+        bytesInFlight = Math.max(0, bytesInFlight - upload.assembler().expectedBytes());
+    }
+
+    private static void closeUpload(Upload upload) {
+        try {
+            upload.assembler().close();
+        } catch (IOException e) {
+            AddurDisc.LOGGER.warn("Could not remove a temporary upload file.", e);
+        }
+    }
+
+    private static void deleteSource(Path source) {
+        try {
+            Files.deleteIfExists(source);
+        } catch (IOException e) {
+            AddurDisc.LOGGER.warn("Could not remove temporary upload {}.", source, e);
         }
     }
 
@@ -383,7 +448,7 @@ public final class DiscNetwork {
     }
 
     private record Upload(UUID transfer, InteractionHand hand, ItemStack expectedStack, String sha1,
-                          String title, ChunkAssembler assembler) {
+                          String title, UploadAssembler assembler) {
     }
 
     private record RequestLog(long windowStart, int count) {
