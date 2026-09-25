@@ -3,6 +3,7 @@
 	"package": "nya.tuyw.addurdisc.mixin",
 	"compatibilityLevel": "JAVA_25",
 	"mixins": [
+		"AnvilMenuMixin",
 		"JukeboxSongMixin",
 		"JukeboxPlayableTooltipMixin",
 		"JukeboxSongPlayerMixin"

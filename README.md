@@ -12,9 +12,13 @@ craft a blank disc, right click to import, and the track syncs to the server and
 2. 手持空白唱片右键，选择音乐文件（或直接把文件拖进窗口）。
 3. 客户端把原始文件上传到服务器，由服务器用 ffmpeg 转成单声道 Ogg Vorbis。
 4. 把绑定好的唱片放进唱片机播放。曲目会自动下载到每一位玩家的客户端。
+5. 要复制曲目，在铁砧左侧放一张空白唱片，右侧放一张已导入音乐的唱片；花费 1 级经验取出结果后，右侧的原唱片会保留。
 
 Supported input: mp3 / wav / ogg / flac / m4a / aac / opus, and video files (mp4 / mkv / webm / avi / mov —
 only the audio is kept).
+
+To copy a track, put a blank disc in the anvil's left slot and an imported disc in the right slot.
+Taking the result costs one experience level and leaves the original disc in the right slot.
 
 ## 前置要求 / Requirements
 
