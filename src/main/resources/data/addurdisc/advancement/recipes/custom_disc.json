@@ -13,7 +13,7 @@
         },
         "has_the_recipe": {
             "conditions": {
-                "recipe": "addurdisc:custom_disc"
+                "recipes": "addurdisc:custom_disc"
             },
             "trigger": "minecraft:recipe_unlocked"
         }

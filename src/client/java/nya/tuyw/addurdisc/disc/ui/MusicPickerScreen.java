@@ -15,14 +15,13 @@ import nya.tuyw.addurdisc.disc.net.DiscClientNetwork;
 
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
  * The screen a blank disc opens: it hands the player an operating system file chooser, converts
  * whatever they pick, and leaves the result to {@link DiscClientNetwork}.
  *
- * <p>The chooser and the conversion both block, so they run on the shared io pool and report back
+ * <p>The chooser is asynchronous; conversion runs on the shared io pool and reports back
  * through {@link net.minecraft.client.Minecraft#executeIfPossible}. The layout follows the same idea
  * as camerapture's upload screen: a title, one line of status, an underlined browse link, and the
  * whole window accepting a dropped file.</p>
@@ -99,7 +98,16 @@ public class MusicPickerScreen extends Screen implements DiscClientNetwork.Impor
         if (!beginWork()) {
             return;
         }
-        runAsync("file chooser", this::browse);
+        NativeFileDialog.pickMusicFile().whenComplete((picked, error) -> {
+            if (error != null) {
+                AddurDisc.LOGGER.error("The file chooser failed.", error);
+                finish(new ImportFailedException(String.valueOf(error.getMessage())).toComponent(), true);
+            } else if (picked.isEmpty()) {
+                finish(Component.translatable("addurdisc.screen.hint"), false);
+            } else {
+                runAsync("conversion", () -> convert(picked.get()));
+            }
+        });
     }
 
     /**
@@ -127,16 +135,6 @@ public class MusicPickerScreen extends Screen implements DiscClientNetwork.Impor
     @FunctionalInterface
     private interface Step {
         void run() throws Exception;
-    }
-
-    /** Waits on a blocking dialog, then converts whatever the player chose. */
-    private void browse() throws InterruptedException {
-        Optional<Path> picked = NativeFileDialog.pickMusicFile();
-        if (picked.isEmpty()) {
-            finish(Component.translatable("addurdisc.screen.hint"), false);
-            return;
-        }
-        convert(picked.get());
     }
 
     private void convert(Path source) throws InterruptedException {

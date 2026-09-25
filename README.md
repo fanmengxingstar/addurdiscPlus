@@ -18,7 +18,7 @@ only the audio is kept).
 
 ## 前置要求 / Requirements
 
-- Minecraft **26.2** · Fabric Loader ≥ 0.19.4 · Fabric API ≥ 0.161.0 · Java ≥ 25
+- Minecraft **26.3** · Fabric Loader ≥ 0.19.5 · Fabric API **0.161.0+26.3** · Java ≥ 25
 - **客户端需要 ffmpeg**：放在 `PATH` 里（名字为 `ffmpeg`），或在
   `config/AddurDisc-common.json` 中把 `ffmpegPath` 设为可执行文件的完整路径。
   ffmpeg 不随模组分发，仅作为外部转换程序调用。没有 ffmpeg 的服务端/仅播放端不受影响。
@@ -51,7 +51,7 @@ only the audio is kept).
 ./gradlew build
 ```
 
-产物在 `build/libs/AddurDisc-Fabric-26.2-<版本>.jar`（`build` 只生成 jar，无需 remap）。
+产物在 `build/libs/AddurDisc-Fabric-26.3-<版本>.jar`（`build` 只生成 jar，无需 remap）。
 
 ## 许可证
 
