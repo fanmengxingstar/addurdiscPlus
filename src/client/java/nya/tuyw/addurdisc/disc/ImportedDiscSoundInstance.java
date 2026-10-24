@@ -1,18 +1,17 @@
 package nya.tuyw.addurdisc.disc;
 
-import it.unimi.dsi.fastutil.floats.FloatConsumer;
 import net.minecraft.client.resources.sounds.AbstractSoundInstance;
 import net.minecraft.client.resources.sounds.Sound;
 import net.minecraft.client.resources.sounds.SoundInstance;
 import net.minecraft.client.sounds.AudioStream;
-import net.minecraft.client.sounds.JOrbisAudioStream;
+import com.mojang.blaze3d.audio.OggAudioStream;
 import net.minecraft.client.sounds.SoundBufferLibrary;
 import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.client.sounds.WeighedSoundEvents;
 import net.minecraft.core.BlockPos;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundSource;
-import net.minecraft.util.Util;
+import net.minecraft.Util;
 import net.minecraft.util.valueproviders.ConstantFloat;
 import net.minecraft.world.phys.Vec3;
 import nya.tuyw.addurdisc.AddurDisc;
@@ -37,38 +36,40 @@ final class ImportedDiscSoundInstance extends AbstractSoundInstance {
     private final long announcedAtNanos;
     private volatile boolean cancelled;
     private AudioStream openedStream;
+    private final WeighedSoundEvents soundEvent;
 
-    ImportedDiscSoundInstance(Identifier id, BlockPos pos, Path source, long elapsedTicks, long announcedAtNanos) {
+    ImportedDiscSoundInstance(ResourceLocation id, BlockPos pos, Path source, long elapsedTicks, long announcedAtNanos) {
         super(id, SoundSource.RECORDS, SoundInstance.createUnseededRandom());
         this.source = source;
-        this.elapsedNanos = Math.clamp(elapsedTicks, 0L, MAX_ELAPSED_TICKS) * TICK_NANOS;
+        this.elapsedNanos = Math.min(MAX_ELAPSED_TICKS, Math.max(0L,elapsedTicks)) * TICK_NANOS;
         this.announcedAtNanos = announcedAtNanos;
         Vec3 center = Vec3.atCenterOf(pos);
         x = center.x;
         y = center.y;
         z = center.z;
         volume = 4.0F;
-        sound = new Sound(id, ConstantFloat.of(1.0F), ConstantFloat.of(1.0F), 1,
+        sound = new Sound(id.toString(), ConstantFloat.of(1.0F), ConstantFloat.of(1.0F), 1,
                 Sound.Type.FILE, true, false, DiscProtocol.AUDIBLE_BLOCKS);
         soundEvent = new WeighedSoundEvents(id, null);
+        pitch = 1.0F;
         soundEvent.addSound(sound);
     }
 
     @Override
-    public WeighedSoundEvents getOrResolve(SoundManager manager) {
+    public WeighedSoundEvents resolve(SoundManager manager) {
         return soundEvent;
     }
 
     /** Fabric routes streamed instances through this hook before consulting vanilla's file cache. */
     @Override
-    public CompletableFuture<AudioStream> getAudioStream(SoundBufferLibrary library, Identifier id, boolean loop) {
+    public CompletableFuture<AudioStream> getAudioStream(SoundBufferLibrary library, ResourceLocation id, boolean loop) {
         return CompletableFuture.supplyAsync(() -> {
             checkCancelled();
             try {
                 InputStream input = Files.newInputStream(source);
-                JOrbisAudioStream stream;
+                OggAudioStream stream;
                 try {
-                    stream = new JOrbisAudioStream(input);
+                    stream = new OggAudioStream(input);
                 } catch (IOException | RuntimeException e) {
                     input.close();
                     throw e;
@@ -88,7 +89,7 @@ final class ImportedDiscSoundInstance extends AbstractSoundInstance {
             } catch (IOException e) {
                 throw new CompletionException(e);
             }
-        }, Util.nonCriticalIoPool());
+        }, Util.ioPool());
     }
 
     /**
@@ -97,20 +98,23 @@ final class ImportedDiscSoundInstance extends AbstractSoundInstance {
      * can lead the exact offset by a few milliseconds, and catch-up is capped so decoding never chases
      * the clock indefinitely. The elapsed value includes the time spent downloading the file.
      */
-    private void skipElapsed(JOrbisAudioStream stream) throws IOException {
+    private void skipElapsed(OggAudioStream stream) throws IOException {
         int channels = stream.getFormat().getChannels();
         float rate = stream.getFormat().getSampleRate();
-        long[] skippedSamples = {0L};
-        FloatConsumer discard = sample -> skippedSamples[0]++;
-        for (int pass = 0; pass < MAX_CATCH_UP_PASSES; pass++) {
-            long ageNanos = Math.min(MAX_ELAPSED_TICKS * TICK_NANOS,
-                    elapsedNanos + Math.max(0L, System.nanoTime() - announcedAtNanos));
-            long targetSamples = (long) (ageNanos / 1_000_000_000.0 * rate) * channels;
-            while (skippedSamples[0] < targetSamples) {
+        long skippedBytes = 0;
+        int frameSize = stream.getFormat().getFrameSize();
+        for (int pass=0;pass<MAX_CATCH_UP_PASSES;pass++) {
+            long ageNanos = Math.min(MAX_ELAPSED_TICKS*TICK_NANOS,
+                    elapsedNanos + Math.max(0L,System.nanoTime()-announcedAtNanos));
+            long targetBytes = (long)(ageNanos/1_000_000_000.0*rate)*frameSize;
+            while (skippedBytes < targetBytes) {
                 checkCancelled();
-                if (!stream.readChunk(discard)) {
-                    return;
-                }
+                int request = (int)Math.min(64*1024L,targetBytes-skippedBytes);
+                request -= request % frameSize;
+                if (request == 0) return;
+                ByteBuffer decoded = stream.read(request);
+                if (!decoded.hasRemaining()) return;
+                skippedBytes += decoded.remaining();
             }
         }
     }

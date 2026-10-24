@@ -21,13 +21,21 @@ try {
     & .\gradlew.bat --offline -I $init "-PreviewClasspathFile=$classpathFile" reviewNetworkClasspath
     if ($LASTEXITCODE -ne 0) { throw 'Could not obtain the production runtime classpath.' }
     $classpath = (Get-Content -LiteralPath $classpathFile -Raw).Trim()
-    & (Join-Path $JavaHome 'bin/javac.exe') -d $work (Join-Path $PSScriptRoot 'NetworkRegression.java')
+    $compileArgs = Join-Path $work 'compile.args'
+    @('-proc:none', '-classpath', ('"' + $classpath.Replace('\', '/') + '"'), '-d',
+        ('"' + $work.Replace('\', '/') + '"'),
+        ('"' + (Join-Path $PSScriptRoot 'LegacyNetworkRegression.java').Replace('\', '/') + '"')) |
+        Set-Content -LiteralPath $compileArgs -Encoding utf8
+    & (Join-Path $JavaHome 'bin/javac.exe') "@$compileArgs"
     if ($LASTEXITCODE -ne 0) { throw 'Regression harness compilation failed.' }
     $arguments = Join-Path $work 'java.args'
-    @('-cp', ('"' + ($work + ';' + $classpath).Replace('\', '/') + '"'), 'NetworkRegression') |
+    @('-cp', ('"' + ($work + ';' + $classpath).Replace('\', '/') + '"'), 'LegacyNetworkRegression') |
         Set-Content -LiteralPath $arguments -Encoding ASCII
-    & (Join-Path $JavaHome 'bin/java.exe') "@$arguments"
-    if ($LASTEXITCODE -ne 0) { throw 'Network regression failed.' }
+    Push-Location $work
+    try {
+        & (Join-Path $JavaHome 'bin/java.exe') "@$arguments"
+        if ($LASTEXITCODE -ne 0) { throw 'Network regression failed.' }
+    } finally { Pop-Location }
 } finally {
     Pop-Location
 }

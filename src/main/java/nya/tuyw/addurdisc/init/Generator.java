@@ -4,14 +4,9 @@ import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
-import com.mojang.serialization.JsonOps;
 import net.minecraft.SharedConstants;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.packs.PackType;
-import net.minecraft.server.packs.metadata.MetadataSectionType;
-import net.minecraft.server.packs.metadata.pack.PackFormat;
-import net.minecraft.server.packs.metadata.pack.PackMetadataSection;
-import net.minecraft.util.InclusiveRange;
 import nya.tuyw.addurdisc.AddurDisc;
 import nya.tuyw.addurdisc.disc.DiscProtocol;
 
@@ -38,17 +33,11 @@ public final class Generator {
      * that simply is not there.
      */
     public static void writePackMcmeta(Path packRoot) {
-        PackFormat format = SharedConstants.getCurrentVersion().packVersion(PackType.CLIENT_RESOURCES);
-        PackMetadataSection section = new PackMetadataSection(
-                Component.translatable("addurdisc.pack.generated"), new InclusiveRange<>(format, format));
-        MetadataSectionType<PackMetadataSection> type = PackMetadataSection.forPackType(PackType.CLIENT_RESOURCES);
-        Optional<JsonElement> body = type.codec().encodeStart(JsonOps.INSTANCE, section).result();
-        if (body.isEmpty()) {
-            AddurDisc.LOGGER.error("Could not describe the generated pack as a {} section.", type.name());
-            return;
-        }
+        JsonObject pack = new JsonObject();
+        pack.addProperty("pack_format", SharedConstants.getCurrentVersion().getPackVersion(PackType.CLIENT_RESOURCES));
+        pack.addProperty("description", "AddurDisc generated music");
         JsonObject json = new JsonObject();
-        json.add(type.name(), body.get());
+        json.add("pack", pack);
         writeAtomically(packRoot.resolve("pack.mcmeta"), new Gson().toJson(json));
     }
 
