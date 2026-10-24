@@ -90,7 +90,7 @@ public final class DiscPayloads {
                 ByteBufCodecs.stringUtf8(DiscProtocol.TITLE_CHARS), UploadStart::title,
                 ByteBufCodecs.VAR_LONG, UploadStart::size,
                 ByteBufCodecs.stringUtf8(DiscProtocol.SHA1_CHARS), UploadStart::sha1,
-                InteractionHand.STREAM_CODEC, UploadStart::hand,
+                ByteBufCodecs.idMapper(index -> { if (index < 0 || index >= InteractionHand.values().length) throw new io.netty.handler.codec.DecoderException("Invalid interaction hand"); return InteractionHand.values()[index]; }, InteractionHand::ordinal), UploadStart::hand,
                 UploadStart::new
         );
 

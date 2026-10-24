@@ -65,7 +65,7 @@ public final class ModInitialize {
                 .setId(key)
                 .stacksTo(1)
                 .rarity(Rarity.RARE)
-                .component(DataComponents.JUKEBOX_PLAYABLE, new JukeboxPlayable(Holder.direct(placeholder)))));
+                .component(DataComponents.JUKEBOX_PLAYABLE, new JukeboxPlayable(new net.minecraft.world.item.EitherHolder<>(Holder.direct(placeholder))))));
 
         CreativeModeTab tab = CreativeModeTab.builder(CreativeModeTab.Row.TOP, 0)
                 .icon(() -> new ItemStack(Items.JUKEBOX))

@@ -1,7 +1,7 @@
 package nya.tuyw.addurdisc.disc;
 
 import net.minecraft.client.Minecraft;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLevelEvents;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientWorldEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.sounds.SoundEngine;
 import net.minecraft.client.sounds.SoundManager;
@@ -39,7 +39,7 @@ public final class DiscClientSounds {
             return;
         }
         registered = true;
-        ClientLevelEvents.AFTER_CLIENT_LEVEL_CHANGE.register((client, level) -> clear());
+        ClientWorldEvents.AFTER_CLIENT_WORLD_CHANGE.register((client, level) -> clear());
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             SoundManager manager = client.getSoundManager();
             PLAYING.values().removeIf(instance -> {

@@ -32,6 +32,7 @@ final class ImportedDiscSoundInstance extends AbstractSoundInstance {
     private static final long TICK_NANOS = 50_000_000L;
     private static final int MAX_CATCH_UP_PASSES = 3;
 
+    private final WeighedSoundEvents soundEvent;
     private final Path source;
     private final long elapsedNanos;
     private final long announcedAtNanos;
@@ -55,7 +56,7 @@ final class ImportedDiscSoundInstance extends AbstractSoundInstance {
     }
 
     @Override
-    public WeighedSoundEvents getOrResolve(SoundManager manager) {
+    public WeighedSoundEvents resolve(SoundManager manager) {
         return soundEvent;
     }
 

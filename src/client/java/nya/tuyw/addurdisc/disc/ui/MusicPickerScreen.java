@@ -1,7 +1,7 @@
 package nya.tuyw.addurdisc.disc.ui;
 
 import net.minecraft.ChatFormatting;
-import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.PlainTextButton;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.ClientPacketListener;
@@ -73,12 +73,12 @@ public class MusicPickerScreen extends Screen implements DiscClientNetwork.Impor
     }
 
     @Override
-    public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
-        super.extractRenderState(graphics, mouseX, mouseY, delta);
-        graphics.centeredText(font, this.title, width / 2, height / 2 - font.lineHeight * 2 - 14, CommonColors.WHITE);
-        graphics.centeredText(font, message, width / 2, height / 2 - font.lineHeight - 4,
+    public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
+        super.render(graphics, mouseX, mouseY, delta);
+        graphics.drawCenteredString(font, this.title, width / 2, height / 2 - font.lineHeight * 2 - 14, CommonColors.WHITE);
+        graphics.drawCenteredString(font, message, width / 2, height / 2 - font.lineHeight - 4,
                 failed ? CommonColors.RED : CommonColors.WHITE);
-        graphics.centeredText(font, Component.translatable("addurdisc.screen.supported"),
+        graphics.drawCenteredString(font, Component.translatable("addurdisc.screen.supported"),
                 width / 2, height / 2 + font.lineHeight * 3 + 8, CommonColors.GRAY);
     }
 
