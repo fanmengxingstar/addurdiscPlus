@@ -1,8 +1,5 @@
 package nya.tuyw.addurdisc.disc.store;
 
-import net.minecraft.network.RegistryFriendlyByteBuf;
-import net.minecraft.network.codec.ByteBufCodecs;
-import net.minecraft.network.codec.StreamCodec;
 import nya.tuyw.addurdisc.disc.DiscProtocol;
 
 /**
@@ -15,11 +12,4 @@ import nya.tuyw.addurdisc.disc.DiscProtocol;
  * @param lengthInSeconds song length, read from the Vorbis headers
  */
 public record SongInfo(String name, long size, String sha1, float lengthInSeconds) {
-    public static final StreamCodec<RegistryFriendlyByteBuf, SongInfo> STREAM_CODEC = StreamCodec.composite(
-            ByteBufCodecs.stringUtf8(DiscProtocol.NAME_CHARS), SongInfo::name,
-            ByteBufCodecs.VAR_LONG, SongInfo::size,
-            ByteBufCodecs.stringUtf8(DiscProtocol.SHA1_CHARS), SongInfo::sha1,
-            ByteBufCodecs.FLOAT, SongInfo::lengthInSeconds,
-            SongInfo::new
-    );
 }
