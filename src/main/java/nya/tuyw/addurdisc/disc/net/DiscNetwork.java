@@ -1,13 +1,11 @@
 package nya.tuyw.addurdisc.disc.net;
 
-import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.util.Util;
+import net.minecraft.Util;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 import nya.tuyw.addurdisc.AddurDisc;
@@ -93,37 +91,27 @@ public final class DiscNetwork {
     });
 
     public static void register() {
-        PayloadTypeRegistry.serverboundPlay().register(UploadStart.TYPE, UploadStart.STREAM_CODEC);
-        PayloadTypeRegistry.serverboundPlay().register(UploadChunk.TYPE, UploadChunk.STREAM_CODEC);
-        PayloadTypeRegistry.serverboundPlay().register(RequestSong.TYPE, RequestSong.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(UploadResult.TYPE, UploadResult.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(SongList.TYPE, SongList.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(DownloadStart.TYPE, DownloadStart.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(DownloadChunk.TYPE, DownloadChunk.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(PlaySong.TYPE, PlaySong.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(PlaybackState.TYPE, PlaybackState.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(StopSong.TYPE, StopSong.STREAM_CODEC);
 
-        ServerPlayNetworking.registerGlobalReceiver(UploadStart.TYPE, DiscNetwork::onUploadStart);
-        ServerPlayNetworking.registerGlobalReceiver(UploadChunk.TYPE, DiscNetwork::onUploadChunk);
-        ServerPlayNetworking.registerGlobalReceiver(RequestSong.TYPE, DiscNetwork::onRequestSong);
+        LegacyServerNetworking.registerGlobalReceiver(UploadStart.TYPE, DiscNetwork::onUploadStart);
+        LegacyServerNetworking.registerGlobalReceiver(UploadChunk.TYPE, DiscNetwork::onUploadChunk);
+        LegacyServerNetworking.registerGlobalReceiver(RequestSong.TYPE, DiscNetwork::onRequestSong);
 
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
-            if (ServerPlayNetworking.canSend(handler.getPlayer(), SongList.TYPE)) {
+            if (LegacyServerNetworking.canSend(handler.player, SongList.TYPE)) {
                 Util.ioPool().execute(() -> {
                     List<SongList> pages = DiscPayloads.pagesOf(SongStore.scan());
-                    server.execute(() -> pages.forEach(page -> send(handler.getPlayer(), page)));
+                    server.execute(() -> pages.forEach(page -> send(handler.player, page)));
                 });
             }
         });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
-            UUID id = handler.getPlayer().getUUID();
+            UUID id = handler.player.getUUID();
             Transfers state = TRANSFERS.get(server);
             if (state == null) return;
             finishUpload(state, id);
             state.requests.remove(id);
-            state.downloads.remove(handler.getPlayer());
-            state.throttles.remove(handler.getPlayer());
+            state.downloads.remove(handler.player);
+            state.throttles.remove(handler.player);
         });
         ServerTickEvents.END_SERVER_TICK.register(server -> {
             if (server.getTickCount() % 20 != 0) return;
@@ -154,12 +142,12 @@ public final class DiscNetwork {
         return TRANSFERS.computeIfAbsent(server, key -> new Transfers());
     }
 
-    private static void onUploadStart(UploadStart payload, ServerPlayNetworking.Context context) {
+    private static void onUploadStart(UploadStart payload, LegacyServerNetworking.Context context) {
         ServerPlayer player = context.player();
         if (payload.transfer() == null || payload.hand() == null) {
             return;
         }
-        if (!ServerPlayNetworking.canSend(player, UploadResult.TYPE)
+        if (!LegacyServerNetworking.canSend(player, UploadResult.TYPE)
                 || !DiscResources.isValidName(payload.suggestedName())
                 || payload.title() == null || payload.title().length() > DiscProtocol.TITLE_CHARS
                 || payload.sha1() == null || !payload.sha1().matches("[0-9a-fA-F]{40}")) {
@@ -206,7 +194,7 @@ public final class DiscNetwork {
         return player.getItemInHand(hand).is(ModInitialize.CUSTOM_DISC);
     }
 
-    private static void onUploadChunk(UploadChunk payload, ServerPlayNetworking.Context context) {
+    private static void onUploadChunk(UploadChunk payload, LegacyServerNetworking.Context context) {
         ServerPlayer player = context.player();
         UUID id = player.getUUID();
         Transfers state = transfers(context.server());
@@ -258,7 +246,7 @@ public final class DiscNetwork {
      * thread. The track binds to the disc only once it is safely on disk, back on the server
      * thread, where the hand check runs again for the same reason it always did.
      */
-    private static void store(ServerPlayNetworking.Context context, Upload upload, Path source) {
+    private static void store(LegacyServerNetworking.Context context, Upload upload, Path source) {
         ServerPlayer player = context.player();
         MinecraftServer server = context.server();
         // The hand is re-read because a transfer takes seconds and the player could have switched
@@ -351,7 +339,7 @@ public final class DiscNetwork {
         if (!upload.state().active) return;
         ItemStack held = player.getItemInHand(upload.hand());
         if (!player.hasDisconnected() && held == upload.expectedStack() && held.is(ModInitialize.CUSTOM_DISC)) {
-            held.set(ModInitialize.DISC_SONG, new SongBinding(stored.name(), stored.lengthInSeconds(), upload.title()));
+            new SongBinding(stored.name(), stored.lengthInSeconds(), upload.title()).applyTo(held);
             player.inventoryMenu.broadcastChanges();
         } else {
             // The write took a moment and the disc it was picked for is gone; the track itself is
@@ -366,9 +354,9 @@ public final class DiscNetwork {
         server.getPlayerList().getPlayers().forEach(other -> send(other, new SongList(List.of(stored))));
     }
 
-    private static void onRequestSong(RequestSong payload, ServerPlayNetworking.Context context) {
+    private static void onRequestSong(RequestSong payload, LegacyServerNetworking.Context context) {
         ServerPlayer player = context.player();
-        if (!ServerPlayNetworking.canSend(player, DownloadStart.TYPE)
+        if (!LegacyServerNetworking.canSend(player, DownloadStart.TYPE)
                 || payload.name() == null || !DiscResources.isValidName(payload.name())) {
             return;
         }
@@ -480,18 +468,18 @@ public final class DiscNetwork {
         send(player, new UploadResult(transfer, failure, "", 0));
     }
 
-    private static void send(ServerPlayer player, net.minecraft.network.protocol.common.custom.CustomPacketPayload payload) {
+    private static void send(ServerPlayer player, DiscPayloads.Payload payload) {
         if (player.hasDisconnected()) {
             return;
         }
-        if (payload instanceof UploadResult && !ServerPlayNetworking.canSend(player, UploadResult.TYPE)) return;
-        if (payload instanceof SongList && !ServerPlayNetworking.canSend(player, SongList.TYPE)) return;
-        if (payload instanceof DownloadStart && !ServerPlayNetworking.canSend(player, DownloadStart.TYPE)) return;
-        if (payload instanceof DownloadChunk && !ServerPlayNetworking.canSend(player, DownloadChunk.TYPE)) return;
-        if (payload instanceof PlaySong && !ServerPlayNetworking.canSend(player, PlaySong.TYPE)) return;
-        if (payload instanceof PlaybackState && !ServerPlayNetworking.canSend(player, PlaybackState.TYPE)) return;
-        if (payload instanceof StopSong && !ServerPlayNetworking.canSend(player, StopSong.TYPE)) return;
-        ServerPlayNetworking.send(player, payload);
+        if (payload instanceof UploadResult && !LegacyServerNetworking.canSend(player, UploadResult.TYPE)) return;
+        if (payload instanceof SongList && !LegacyServerNetworking.canSend(player, SongList.TYPE)) return;
+        if (payload instanceof DownloadStart && !LegacyServerNetworking.canSend(player, DownloadStart.TYPE)) return;
+        if (payload instanceof DownloadChunk && !LegacyServerNetworking.canSend(player, DownloadChunk.TYPE)) return;
+        if (payload instanceof PlaySong && !LegacyServerNetworking.canSend(player, PlaySong.TYPE)) return;
+        if (payload instanceof PlaybackState && !LegacyServerNetworking.canSend(player, PlaybackState.TYPE)) return;
+        if (payload instanceof StopSong && !LegacyServerNetworking.canSend(player, StopSong.TYPE)) return;
+        LegacyServerNetworking.send(player, payload);
     }
 
     private static String describe(ServerPlayer player) {
