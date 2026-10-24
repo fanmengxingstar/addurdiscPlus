@@ -1,17 +1,19 @@
 {
 	"required": true,
 	"package": "nya.tuyw.addurdisc.mixin",
-	"compatibilityLevel": "JAVA_25",
+	"compatibilityLevel": "JAVA_21",
 	"mixins": [
 		"AnvilMenuMixin",
 		"JukeboxSongMixin",
 		"JukeboxPlayableTooltipMixin",
 		"JukeboxSongPlayerMixin",
-		"JukeboxBlockEntityMixin"
+		"JukeboxBlockEntityMixin",
+		"JukeboxRemovalMixin"
 	],
 	"client": [
 		"LevelEventHandlerMixin",
-		"MixinPackRepository"
+		"MixinPackRepository",
+		"ClientLevelChangeMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1
