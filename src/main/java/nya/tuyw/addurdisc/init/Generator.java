@@ -9,7 +9,6 @@ import net.minecraft.SharedConstants;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.metadata.MetadataSectionType;
-import net.minecraft.server.packs.metadata.pack.PackFormat;
 import net.minecraft.server.packs.metadata.pack.PackMetadataSection;
 import net.minecraft.util.InclusiveRange;
 import nya.tuyw.addurdisc.AddurDisc;
@@ -38,10 +37,10 @@ public final class Generator {
      * that simply is not there.
      */
     public static void writePackMcmeta(Path packRoot) {
-        PackFormat format = SharedConstants.getCurrentVersion().packVersion(PackType.CLIENT_RESOURCES);
+        int format = SharedConstants.getCurrentVersion().packVersion(PackType.CLIENT_RESOURCES);
         PackMetadataSection section = new PackMetadataSection(
-                Component.translatable("addurdisc.pack.generated"), new InclusiveRange<>(format, format));
-        MetadataSectionType<PackMetadataSection> type = PackMetadataSection.forPackType(PackType.CLIENT_RESOURCES);
+                Component.translatable("addurdisc.pack.generated"), format, Optional.of(new InclusiveRange<>(format, format)));
+        MetadataSectionType<PackMetadataSection> type = PackMetadataSection.TYPE;
         Optional<JsonElement> body = type.codec().encodeStart(JsonOps.INSTANCE, section).result();
         if (body.isEmpty()) {
             AddurDisc.LOGGER.error("Could not describe the generated pack as a {} section.", type.name());

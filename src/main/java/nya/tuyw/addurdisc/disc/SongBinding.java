@@ -8,7 +8,7 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.world.item.JukeboxSong;
 import nya.tuyw.addurdisc.AddurDisc;
@@ -67,8 +67,8 @@ public record SongBinding(String sound, float lengthInSeconds, String title) {
         return DiscResources.isValidName(sound);
     }
 
-    public Identifier soundId() {
-        return Identifier.fromNamespaceAndPath(AddurDisc.MODID, sound);
+    public ResourceLocation soundId() {
+        return ResourceLocation.fromNamespaceAndPath(AddurDisc.MODID, sound);
     }
 
     /**
