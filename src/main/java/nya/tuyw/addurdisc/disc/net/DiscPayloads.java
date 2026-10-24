@@ -7,7 +7,7 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.InteractionHand;
 import nya.tuyw.addurdisc.AddurDisc;
 import nya.tuyw.addurdisc.disc.DiscProtocol;
@@ -26,8 +26,8 @@ import java.util.UUID;
  */
 public final class DiscPayloads {
 
-    private static Identifier id(String name) {
-        return Identifier.fromNamespaceAndPath(AddurDisc.MODID, name);
+    private static ResourceLocation id(String name) {
+        return ResourceLocation.fromNamespaceAndPath(AddurDisc.MODID, name);
     }
 
     /** Why a transfer stopped. What the player reads is picked from this, never taken from the wire. */
@@ -90,7 +90,7 @@ public final class DiscPayloads {
                 ByteBufCodecs.stringUtf8(DiscProtocol.TITLE_CHARS), UploadStart::title,
                 ByteBufCodecs.VAR_LONG, UploadStart::size,
                 ByteBufCodecs.stringUtf8(DiscProtocol.SHA1_CHARS), UploadStart::sha1,
-                InteractionHand.STREAM_CODEC, UploadStart::hand,
+                ByteBufCodecs.idMapper(index -> { if (index < 0 || index >= InteractionHand.values().length) throw new io.netty.handler.codec.DecoderException("Invalid interaction hand"); return InteractionHand.values()[index]; }, InteractionHand::ordinal), UploadStart::hand,
                 UploadStart::new
         );
 
@@ -210,10 +210,10 @@ public final class DiscPayloads {
      * Vanilla announces a jukebox song as an index into the jukebox_song datapack registry, which a
      * runtime built song is not part of, so the server names the sound itself.
      */
-    public record PlaySong(Identifier sound, BlockPos pos) implements CustomPacketPayload {
+    public record PlaySong(ResourceLocation sound, BlockPos pos) implements CustomPacketPayload {
         public static final CustomPacketPayload.Type<PlaySong> TYPE = new CustomPacketPayload.Type<>(id("play_song"));
         public static final StreamCodec<RegistryFriendlyByteBuf, PlaySong> STREAM_CODEC = StreamCodec.composite(
-                Identifier.STREAM_CODEC, PlaySong::sound,
+                ResourceLocation.STREAM_CODEC, PlaySong::sound,
                 BlockPos.STREAM_CODEC, PlaySong::pos,
                 PlaySong::new
         );
@@ -225,13 +225,13 @@ public final class DiscPayloads {
     }
 
     /** Current jukebox state, including progress for players entering range after playback began. */
-    public record PlaybackState(Identifier sound, BlockPos pos, Identifier dimension, long elapsedTicks)
+    public record PlaybackState(ResourceLocation sound, BlockPos pos, ResourceLocation dimension, long elapsedTicks)
             implements CustomPacketPayload {
         public static final Type<PlaybackState> TYPE = new Type<>(id("playback_state"));
         public static final StreamCodec<RegistryFriendlyByteBuf, PlaybackState> STREAM_CODEC = StreamCodec.composite(
-                Identifier.STREAM_CODEC, PlaybackState::sound,
+                ResourceLocation.STREAM_CODEC, PlaybackState::sound,
                 BlockPos.STREAM_CODEC, PlaybackState::pos,
-                Identifier.STREAM_CODEC, PlaybackState::dimension,
+                ResourceLocation.STREAM_CODEC, PlaybackState::dimension,
                 ByteBufCodecs.VAR_LONG, PlaybackState::elapsedTicks,
                 PlaybackState::new);
 
@@ -242,11 +242,11 @@ public final class DiscPayloads {
     }
 
     /** Sent to previously notified players even after they have moved outside the vanilla event range. */
-    public record StopSong(BlockPos pos, Identifier dimension) implements CustomPacketPayload {
+    public record StopSong(BlockPos pos, ResourceLocation dimension) implements CustomPacketPayload {
         public static final Type<StopSong> TYPE = new Type<>(id("stop_song"));
         public static final StreamCodec<RegistryFriendlyByteBuf, StopSong> STREAM_CODEC = StreamCodec.composite(
                 BlockPos.STREAM_CODEC, StopSong::pos,
-                Identifier.STREAM_CODEC, StopSong::dimension,
+                ResourceLocation.STREAM_CODEC, StopSong::dimension,
                 StopSong::new);
 
         @Override
