@@ -22,7 +22,7 @@ Taking the result costs one experience level and leaves the original disc in the
 
 ## 前置要求 / Requirements
 
-- Minecraft **26.3** · Fabric Loader ≥ 0.19.5 · Fabric API **0.161.0+26.3** · Java ≥ 25
+- Minecraft **1.20.5** · Fabric Loader ≥ 0.19.5 · Fabric API **0.97.8+1.20.5** · Java ≥ 21
 - **服务器需要 ffmpeg**：放在服务器进程的 `PATH` 里（名字为 `ffmpeg`），或在
   `config/AddurDisc-common.json` 中把 `ffmpegPath` 设为服务器上可执行文件的完整路径。
   ffmpeg 不随模组分发。客户端无需安装 ffmpeg；纯客户端或仅播放端也不需要转换器。
@@ -42,12 +42,13 @@ Taking the result costs one experience level and leaves the original disc in the
 
 ## 工作原理（简要）
 
-- 全模组只有一个物品 `addurdisc:custom_disc`，导入的曲目存放在
-  `<游戏目录>/.addurdisc/assets/addurdisc/sounds/` 下的数据组件里，不新增注册项。
+- 全模组只有一个唱片物品 `addurdisc:custom_disc`。音频文件存放在
+  `<游戏目录>/.addurdisc/assets/addurdisc/sounds/`；歌曲名称、标题和时长存放在唱片的
+  `addurdisc:disc_song` 数据组件中，随物品自动保存和同步。每首导入歌曲不新增物品或声音注册项。
 - 曲目通过自建分块协议在服务器与客户端之间传输（上传原始文件 16 KB/块，下载 Ogg 128 KB/块，SHA-1 校验）。
   服务端临时接收原始文件，在后台转换并校验 Ogg Vorbis 后入库，随后删除上传临时文件。
-- 播放广播不依赖原版唱片注册表（运行期构造的 `JukeboxSong` 没有 registry id），
-  由模组自带的 `PlaySong` 通道完成。
+- 旧版原版唱片机只识别物品对应的固定声音和时长；模组读取唱片数据组件 决定实际时长，
+  并通过自带通道同步歌曲、维度、位置和播放进度。中途进入范围的玩家从当前进度开始播放。
 
 ## 构建 / Build
 
@@ -55,7 +56,8 @@ Taking the result costs one experience level and leaves the original disc in the
 ./gradlew build
 ```
 
-产物在 `build/libs/AddurDisc-Fabric-26.3-<版本>.jar`（`build` 只生成 jar，无需 remap）。
+产物在 `build/libs/AddurDisc-Fabric-1.20.5-<模组版本>.jar`。构建会自动执行 remap，使用不带 `sources` 的发布 jar。
+此次使用 JDK 25 运行 Gradle/Loom，输出 Java 21 字节码。
 
 ## 许可证
 

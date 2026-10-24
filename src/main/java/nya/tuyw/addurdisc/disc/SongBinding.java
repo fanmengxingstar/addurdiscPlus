@@ -3,32 +3,19 @@ package nya.tuyw.addurdisc.disc;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.ChatFormatting;
-import net.minecraft.core.Holder;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
-import net.minecraft.resources.Identifier;
-import net.minecraft.sounds.SoundEvent;
-import net.minecraft.world.item.JukeboxSong;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.item.ItemStack;
+import nya.tuyw.addurdisc.init.ModInitialize;
 import nya.tuyw.addurdisc.AddurDisc;
 import nya.tuyw.addurdisc.config.ConfigUtil;
 import nya.tuyw.addurdisc.init.DiscResources;
 import nya.tuyw.addurdisc.util.Utf8;
 
-/**
- * Binds an imported track to a {@link CustomDiscItem}.
- *
- * <p>Deliberately stores only the bare sound name instead of a {@code JukeboxSong} holder: the item
- * registry is frozen once bootstrapping finished, so an imported track can never become a newly
- * registered item, and a song built at runtime is not part of the {@code jukebox_song} datapack
- * registry that vanilla's own components and packets point at.</p>
- *
- * <p>Every value is normalised in the canonical constructor, which is the one path both a codec
- * decode and a {@code /give} share. The limits are counted in UTF-8 <em>bytes</em>, because that is
- * what the packet codec enforces: a title cut to a character count could still be three times the
- * size the codec accepts, and the player holding such an item would be kicked on every login.</p>
- */
+/** A normalized per-disc song component, persisted and synchronized without registering each track. */
 public record SongBinding(String sound, float lengthInSeconds, String title) {
     /** Comparator output a jukebox reports while one of these discs plays. */
     public static final int COMPARATOR_OUTPUT = 15;
@@ -67,8 +54,8 @@ public record SongBinding(String sound, float lengthInSeconds, String title) {
         return DiscResources.isValidName(sound);
     }
 
-    public Identifier soundId() {
-        return Identifier.fromNamespaceAndPath(AddurDisc.MODID, sound);
+    public ResourceLocation soundId() {
+        return new ResourceLocation(AddurDisc.MODID, sound);
     }
 
     /**
@@ -79,12 +66,6 @@ public record SongBinding(String sound, float lengthInSeconds, String title) {
         return title.isBlank() ? Component.literal(sound) : Component.literal(title);
     }
 
-    /**
-     * Builds the song a datapack would otherwise have loaded. Both holders are direct, which works
-     * locally but leaves the song without the registry id vanilla uses to announce a playback.
-     */
-    public Holder<JukeboxSong> asSong() {
-        SoundEvent event = SoundEvent.createVariableRangeEvent(soundId());
-        return Holder.direct(new JukeboxSong(Holder.direct(event), description(), lengthInSeconds, COMPARATOR_OUTPUT));
-    }
+    public static SongBinding fromStack(ItemStack stack) { return stack.get(ModInitialize.DISC_SONG); }
+    public void applyTo(ItemStack stack) { stack.set(ModInitialize.DISC_SONG,this); }
 }

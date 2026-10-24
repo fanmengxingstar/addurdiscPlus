@@ -1,8 +1,6 @@
 package nya.tuyw.addurdisc.mixin;
 
-import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
-import net.minecraft.util.StringUtil;
 import net.minecraft.world.Container;
 import net.minecraft.world.inventory.AnvilMenu;
 import net.minecraft.world.inventory.DataSlot;
@@ -22,12 +20,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class AnvilMenuMixin extends ItemCombinerMenu {
     @Shadow @Final private DataSlot cost;
     @Shadow private int repairItemCountCost;
-    @Shadow private boolean onlyRenaming;
+
     @Shadow private String itemName;
 
     private AnvilMenuMixin() {
-        super(null, 0, null, null, null);
+        super(null, 0, null, null);
     }
+
 
     @Inject(method = "createResult", at = @At("HEAD"), cancellable = true)
     private void addurdisc$copySong(CallbackInfo ci) {
@@ -38,26 +37,42 @@ public abstract class AnvilMenuMixin extends ItemCombinerMenu {
             return;
         }
 
-        SongBinding existing = blank.get(ModInitialize.DISC_SONG);
-        SongBinding song = source.get(ModInitialize.DISC_SONG);
+        SongBinding existing = SongBinding.fromStack(blank);
+        SongBinding song = SongBinding.fromStack(source);
         if ((existing != null && existing.isBound()) || song == null || !song.isBound()) {
             return;
         }
 
         ItemStack output = blank.copy();
-        output.set(ModInitialize.DISC_SONG, song);
-        if (StringUtil.isBlank(this.itemName)) {
-            output.remove(DataComponents.CUSTOM_NAME);
+        song.applyTo(output);
+        if (this.itemName == null || this.itemName.isBlank()) {
+            output.remove(net.minecraft.core.component.DataComponents.CUSTOM_NAME);
         } else if (!this.itemName.equals(blank.getHoverName().getString())) {
-            output.set(DataComponents.CUSTOM_NAME, Component.literal(this.itemName));
+            output.set(net.minecraft.core.component.DataComponents.CUSTOM_NAME,Component.literal(this.itemName));
         }
         this.resultSlots.setItem(0, output);
         this.cost.set(1);
         this.repairItemCountCost = 0;
-        // Vanilla's onTake keeps the second input when it is only renaming and no
-        // repair materials are owed. The same path preserves our source disc.
-        this.onlyRenaming = true;
+        // onTake below preserves the original source while vanilla consumes the blank and one level.
+
         this.broadcastChanges();
         ci.cancel();
+    }
+    @org.spongepowered.asm.mixin.Unique private boolean addurdisc$copying;
+    @Inject(method = "onTake", at = @At("HEAD"))
+    private void addurdisc$preserveSource(net.minecraft.world.entity.player.Player player, ItemStack stack, CallbackInfo ci) {
+        SongBinding blank = SongBinding.fromStack(this.inputSlots.getItem(0));
+        SongBinding source = SongBinding.fromStack(this.inputSlots.getItem(1));
+        this.addurdisc$copying = this.inputSlots.getItem(0).is(ModInitialize.CUSTOM_DISC)
+                && this.inputSlots.getItem(1).is(ModInitialize.CUSTOM_DISC)
+                && (blank == null || !blank.isBound()) && source != null && source.isBound();
+    }
+    @org.spongepowered.asm.mixin.injection.Redirect(method = "onTake", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/Container;setItem(ILnet/minecraft/world/item/ItemStack;)V"))
+    private void addurdisc$keepOriginal(Container container, int slot, ItemStack stack) {
+        if (slot != 1 || !this.addurdisc$copying) container.setItem(slot, stack);
+    }
+    @Inject(method = "onTake", at = @At("TAIL"))
+    private void addurdisc$finishCopy(net.minecraft.world.entity.player.Player player, ItemStack stack, CallbackInfo ci) {
+        this.addurdisc$copying = false;
     }
 }

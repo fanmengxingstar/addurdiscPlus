@@ -16,7 +16,7 @@ public class AddurDiscClient implements ClientModInitializer {
         // the screen is handed to the next tick instead.
         DiscPickers.open = (player, hand) -> {
             Minecraft client = Minecraft.getInstance();
-            client.executeIfPossible(() -> client.setScreenAndShow(new MusicPickerScreen(hand)));
+            client.execute(() -> client.setScreen(new MusicPickerScreen(hand)));
         };
     }
 }
