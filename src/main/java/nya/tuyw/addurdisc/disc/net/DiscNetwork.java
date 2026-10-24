@@ -7,7 +7,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.util.Util;
+import net.minecraft.Util;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 import nya.tuyw.addurdisc.AddurDisc;
@@ -93,16 +93,16 @@ public final class DiscNetwork {
     });
 
     public static void register() {
-        PayloadTypeRegistry.serverboundPlay().register(UploadStart.TYPE, UploadStart.STREAM_CODEC);
-        PayloadTypeRegistry.serverboundPlay().register(UploadChunk.TYPE, UploadChunk.STREAM_CODEC);
-        PayloadTypeRegistry.serverboundPlay().register(RequestSong.TYPE, RequestSong.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(UploadResult.TYPE, UploadResult.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(SongList.TYPE, SongList.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(DownloadStart.TYPE, DownloadStart.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(DownloadChunk.TYPE, DownloadChunk.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(PlaySong.TYPE, PlaySong.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(PlaybackState.TYPE, PlaybackState.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(StopSong.TYPE, StopSong.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(UploadStart.TYPE, UploadStart.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(UploadChunk.TYPE, UploadChunk.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(RequestSong.TYPE, RequestSong.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(UploadResult.TYPE, UploadResult.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(SongList.TYPE, SongList.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(DownloadStart.TYPE, DownloadStart.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(DownloadChunk.TYPE, DownloadChunk.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(PlaySong.TYPE, PlaySong.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(PlaybackState.TYPE, PlaybackState.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(StopSong.TYPE, StopSong.STREAM_CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(UploadStart.TYPE, DiscNetwork::onUploadStart);
         ServerPlayNetworking.registerGlobalReceiver(UploadChunk.TYPE, DiscNetwork::onUploadChunk);

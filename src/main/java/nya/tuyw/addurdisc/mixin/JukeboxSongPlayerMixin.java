@@ -3,7 +3,7 @@ package nya.tuyw.addurdisc.mixin;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.JukeboxSong;
 import net.minecraft.world.level.LevelAccessor;
@@ -55,7 +55,7 @@ public class JukeboxSongPlayerMixin {
 
     @Unique
     private void addurdisc$updateListeners(ServerLevel level, Holder<JukeboxSong> song) {
-        Identifier sound = song.value().soundEvent().value().location();
+        ResourceLocation sound = song.value().soundEvent().value().location();
         if (AddurDisc.MODID.equals(sound.getNamespace())
                 && level.registryAccess().lookupOrThrow(Registries.JUKEBOX_SONG).getId(song.value()) < 0) {
             DiscPlayback.update(level, this.blockPos, sound, this.ticksSinceSongStarted);
