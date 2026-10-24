@@ -35,6 +35,7 @@ final class ImportedDiscSoundInstance extends AbstractSoundInstance {
     private final Path source;
     private final long elapsedNanos;
     private final long announcedAtNanos;
+    private final WeighedSoundEvents soundEvent;
     private volatile boolean cancelled;
     private AudioStream openedStream;
 
@@ -55,8 +56,13 @@ final class ImportedDiscSoundInstance extends AbstractSoundInstance {
     }
 
     @Override
-    public WeighedSoundEvents getOrResolve(SoundManager manager) {
+    public WeighedSoundEvents resolve(SoundManager manager) {
         return soundEvent;
+    }
+
+    @Override
+    public Sound getSound() {
+        return sound;
     }
 
     /** Fabric routes streamed instances through this hook before consulting vanilla's file cache. */

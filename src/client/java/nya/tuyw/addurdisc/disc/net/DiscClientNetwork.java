@@ -231,7 +231,7 @@ public final class DiscClientNetwork {
     private static void tellPlayer(Component message) {
         Minecraft client = Minecraft.getInstance();
         if (client.player != null) {
-            client.gui.chatListener().handleSystemMessage(message, false);
+            client.getChatListener().handleSystemMessage(message, false);
         }
     }
 
