@@ -1,13 +1,12 @@
 package nya.tuyw.addurdisc.disc.ui;
 
 import net.minecraft.ChatFormatting;
-import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.PlainTextButton;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.chat.Component;
-import net.minecraft.util.CommonColors;
-import net.minecraft.util.Util;
+import net.minecraft.Util;
 import net.minecraft.world.InteractionHand;
 import nya.tuyw.addurdisc.AddurDisc;
 import nya.tuyw.addurdisc.disc.audio.ImportFailedException;
@@ -73,13 +72,14 @@ public class MusicPickerScreen extends Screen implements DiscClientNetwork.Impor
     }
 
     @Override
-    public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
-        super.extractRenderState(graphics, mouseX, mouseY, delta);
-        graphics.centeredText(font, this.title, width / 2, height / 2 - font.lineHeight * 2 - 14, CommonColors.WHITE);
-        graphics.centeredText(font, message, width / 2, height / 2 - font.lineHeight - 4,
-                failed ? CommonColors.RED : CommonColors.WHITE);
-        graphics.centeredText(font, Component.translatable("addurdisc.screen.supported"),
-                width / 2, height / 2 + font.lineHeight * 3 + 8, CommonColors.GRAY);
+    public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
+        renderBackground(graphics, mouseX, mouseY, delta);
+        super.render(graphics, mouseX, mouseY, delta);
+        graphics.drawCenteredString(font, this.title, width / 2, height / 2 - font.lineHeight * 2 - 14, 0xFFFFFF);
+        graphics.drawCenteredString(font, message, width / 2, height / 2 - font.lineHeight - 4,
+                failed ? 0xFF5555 : 0xFFFFFF);
+        graphics.drawCenteredString(font, Component.translatable("addurdisc.screen.supported"),
+                width / 2, height / 2 + font.lineHeight * 3 + 8, 0xAAAAAA);
     }
 
     @Override
@@ -163,7 +163,7 @@ public class MusicPickerScreen extends Screen implements DiscClientNetwork.Impor
 
     /** Applies a result that arrived off the client thread, once that thread picks it up. */
     private void finish(Component message, boolean failed) {
-        minecraft.executeIfPossible(() -> {
+        minecraft.execute(() -> {
             busy = false;
             show(message, failed);
         });

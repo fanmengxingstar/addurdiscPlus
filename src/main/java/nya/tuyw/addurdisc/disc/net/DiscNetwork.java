@@ -7,7 +7,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.util.Util;
+import net.minecraft.Util;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 import nya.tuyw.addurdisc.AddurDisc;
@@ -93,16 +93,16 @@ public final class DiscNetwork {
     });
 
     public static void register() {
-        PayloadTypeRegistry.serverboundPlay().register(UploadStart.TYPE, UploadStart.STREAM_CODEC);
-        PayloadTypeRegistry.serverboundPlay().register(UploadChunk.TYPE, UploadChunk.STREAM_CODEC);
-        PayloadTypeRegistry.serverboundPlay().register(RequestSong.TYPE, RequestSong.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(UploadResult.TYPE, UploadResult.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(SongList.TYPE, SongList.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(DownloadStart.TYPE, DownloadStart.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(DownloadChunk.TYPE, DownloadChunk.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(PlaySong.TYPE, PlaySong.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(PlaybackState.TYPE, PlaybackState.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(StopSong.TYPE, StopSong.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(UploadStart.TYPE, UploadStart.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(UploadChunk.TYPE, UploadChunk.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(RequestSong.TYPE, RequestSong.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(UploadResult.TYPE, UploadResult.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(SongList.TYPE, SongList.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(DownloadStart.TYPE, DownloadStart.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(DownloadChunk.TYPE, DownloadChunk.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(PlaySong.TYPE, PlaySong.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(PlaybackState.TYPE, PlaybackState.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(StopSong.TYPE, StopSong.STREAM_CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(UploadStart.TYPE, DiscNetwork::onUploadStart);
         ServerPlayNetworking.registerGlobalReceiver(UploadChunk.TYPE, DiscNetwork::onUploadChunk);
@@ -171,7 +171,7 @@ public final class DiscNetwork {
             return;
         }
         UUID id = player.getUUID();
-        Transfers state = transfers(context.server());
+        Transfers state = transfers(context.player().server);
         if (state.uploads.containsKey(id)) {
             // Two transfers at once would otherwise have the second one's bytes stored under the
             // first one's name, because both are keyed on the player rather than the transfer.
@@ -209,7 +209,7 @@ public final class DiscNetwork {
     private static void onUploadChunk(UploadChunk payload, ServerPlayNetworking.Context context) {
         ServerPlayer player = context.player();
         UUID id = player.getUUID();
-        Transfers state = transfers(context.server());
+        Transfers state = transfers(context.player().server);
         Upload upload = state.uploads.get(id);
         if (upload == null || !upload.transfer().equals(payload.transfer())) {
             // Chunks of a transfer that was replaced or already finished. Nothing to answer.
@@ -260,7 +260,7 @@ public final class DiscNetwork {
      */
     private static void store(ServerPlayNetworking.Context context, Upload upload, Path source) {
         ServerPlayer player = context.player();
-        MinecraftServer server = context.server();
+        MinecraftServer server = context.player().server;
         // The hand is re-read because a transfer takes seconds and the player could have switched
         // stacks meanwhile; the identity check is what stops the track landing on whatever is being
         // held now instead of on the disc the file was picked for.
@@ -372,13 +372,13 @@ public final class DiscNetwork {
                 || payload.name() == null || !DiscResources.isValidName(payload.name())) {
             return;
         }
-        Transfers state = transfers(context.server());
+        Transfers state = transfers(context.player().server);
         DownloadThrottle throttle = state.throttles.computeIfAbsent(player, key -> new DownloadThrottle());
         Download transfer = new Download(throttle);
         // The connection object owns the reservation: an old worker cannot release a reconnect's slot.
         if (state.downloads.putIfAbsent(player, transfer) != null) return;
         long delay = requestDelay(state, player.getUUID());
-        MinecraftServer server = context.server();
+        MinecraftServer server = context.player().server;
         Util.ioPool().execute(() -> streamTrack(server, state, player, payload.name(), transfer, delay));
     }
 

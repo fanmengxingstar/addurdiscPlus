@@ -3,8 +3,10 @@ package nya.tuyw.addurdisc.disc.ui;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 import nya.tuyw.addurdisc.AddurDisc;
-import org.lwjgl.sdl.SDL_DialogFileCallback;
-import org.lwjgl.sdl.SDL_DialogFileFilter;
+import org.lwjgl.PointerBuffer;
+import org.lwjgl.system.MemoryStack;
+import org.lwjgl.util.tinyfd.TinyFileDialogs;
+import net.minecraft.Util;
 
 import java.awt.EventQueue;
 import java.awt.FileDialog;
@@ -16,17 +18,7 @@ import java.nio.file.Path;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-import static org.lwjgl.sdl.SDLDialog.*;
-import static org.lwjgl.sdl.SDLError.SDL_GetError;
-import static org.lwjgl.sdl.SDLProperties.*;
-import static org.lwjgl.system.MemoryUtil.*;
-
-/**
- * Opens the operating system's file chooser.
- *
- * <p>SDL must open the dialog on the game thread, but delivers its result asynchronously. The AWT
- * fallback uses its own event thread. Neither implementation waits on the game thread.</p>
- */
+/** Opens an asynchronous OS file chooser using the legacy game's bundled TinyFD library. */
 public final class NativeFileDialog {
     /** Filter shown in the chooser; ffmpeg on the server can read more formats than these. */
     private static final String FILTERS = "mp3;wav;ogg;flac;m4a;aac;opus;mp4;mkv;webm;avi;mov";
@@ -35,74 +27,19 @@ public final class NativeFileDialog {
     /** Called from the file-picker screen on the client thread. Empty means the user canceled. */
     public static CompletableFuture<Optional<Path>> pickMusicFile() {
         String title = Component.translatable("addurdisc.screen.title").getString();
-        CompletableFuture<Optional<Path>> result = new CompletableFuture<>();
-        try {
-            new SdlDialog(result).open(title, Minecraft.getInstance().getWindow().handle());
-        } catch (RuntimeException | LinkageError e) {
-            result.completeExceptionally(e);
-        }
-        return result.exceptionallyCompose(error -> {
-            AddurDisc.LOGGER.debug("SDL file dialog failed, falling back to AWT", error);
+        return CompletableFuture.supplyAsync(() -> {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                String[] extensions = FILTERS.split(";");
+                PointerBuffer filters = stack.mallocPointer(extensions.length);
+                for (String extension : extensions) filters.put(stack.UTF8("*." + extension));
+                filters.flip();
+                String picked = TinyFileDialogs.tinyfd_openFileDialog(title, null, filters, FILTER_DESCRIPTION, false);
+                return picked == null ? Optional.<Path>empty() : toPath(picked);
+            }
+        }, Util.ioPool()).exceptionallyCompose(error -> {
+            AddurDisc.LOGGER.debug("TinyFD file dialog failed, falling back to AWT", error);
             return awtDialog(title);
         });
-    }
-
-    /** Owns native data until SDL delivers its one callback, including cancellation and failure. */
-    private static final class SdlDialog extends SDL_DialogFileCallback {
-        private final CompletableFuture<Optional<Path>> result;
-        private final ByteBuffer name = memUTF8(FILTER_DESCRIPTION);
-        private final ByteBuffer pattern = memUTF8(FILTERS);
-        private final SDL_DialogFileFilter.Buffer filters = SDL_DialogFileFilter.calloc(1);
-
-        private SdlDialog(CompletableFuture<Optional<Path>> result) {
-            this.result = result;
-            filters.get(0).name(name).pattern(pattern);
-        }
-
-        private void open(String title, long window) {
-            int properties = SDL_CreateProperties();
-            try {
-                if (properties == 0
-                        || !SDL_SetPointerProperty(properties, SDL_PROP_FILE_DIALOG_WINDOW_POINTER, window)
-                        || !SDL_SetPointerProperty(properties, SDL_PROP_FILE_DIALOG_FILTERS_POINTER, filters.address())
-                        || !SDL_SetNumberProperty(properties, SDL_PROP_FILE_DIALOG_NFILTERS_NUMBER, 1)
-                        || !SDL_SetBooleanProperty(properties, SDL_PROP_FILE_DIALOG_MANY_BOOLEAN, false)
-                        || !SDL_SetStringProperty(properties, SDL_PROP_FILE_DIALOG_TITLE_STRING, title)) {
-                    throw new IllegalStateException(SDL_GetError());
-                }
-                SDL_ShowFileDialogWithProperties(SDL_FILEDIALOG_OPENFILE, this, NULL, properties);
-            } catch (RuntimeException | LinkageError e) {
-                release();
-                throw e;
-            } finally {
-                // SDL copies the properties; the pointed-to filters remain ours until the callback.
-                SDL_DestroyProperties(properties);
-            }
-        }
-
-        @Override
-        public void invoke(long userdata, long filelist, int filter) {
-            try {
-                if (filelist == NULL) {
-                    result.completeExceptionally(new IllegalStateException(SDL_GetError()));
-                } else {
-                    long first = memGetAddress(filelist);
-                    // SDL owns the list and frees it on return. Copy the UTF-8 path now.
-                    result.complete(first == NULL ? Optional.empty() : toPath(memUTF8(first)));
-                }
-            } catch (RuntimeException e) {
-                result.completeExceptionally(e);
-            } finally {
-                release();
-            }
-        }
-
-        private void release() {
-            filters.free();
-            memFree(pattern);
-            memFree(name);
-            free();
-        }
     }
 
     private static Optional<Path> toPath(String picked) {

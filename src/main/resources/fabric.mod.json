@@ -1,35 +1,39 @@
 {
-	"schemaVersion": 1,
-	"id": "addurdisc",
-	"version": "${version}",
-	"name": "AddurDisc",
-	"description": "Now you can add your discs!",
-	"authors": [
-		"TuYw"
-	],
-	"contact": {
-		"homepage": "https://www.mcmod.cn/class/15072.html",
-		"sources": "https://github.com/TunYuntuwuQWQ/addurdisc",
-		"issues": "https://github.com/TunYuntuwuQWQ/addurdisc/issues"
-	},
-	"license": "MIT",
-	"icon": "assets/addurdisc/icon.png",
-	"environment": "*",
-	"entrypoints": {
-		"main": [
-			"nya.tuyw.addurdisc.AddurDisc"
-		],
-		"client": [
-			"nya.tuyw.addurdisc.AddurDiscClient"
-		]
-	},
-	"mixins": [
-		"addurdisc.mixins.json"
-	],
-	"depends": {
-		"fabricloader": ">=0.19.5",
-		"minecraft": "26.3",
-		"java": ">=25",
-		"fabric-api": ">=0.161.0"
-	}
+  "schemaVersion": 1,
+  "id": "addurdisc",
+  "version": "${version}",
+  "name": "AddurDisc",
+  "description": "Now you can add your discs!",
+  "authors": [
+    "TuYw"
+  ],
+  "contact": {
+    "homepage": "https://www.mcmod.cn/class/15072.html",
+    "sources": "https://github.com/TunYuntuwuQWQ/addurdisc",
+    "issues": "https://github.com/TunYuntuwuQWQ/addurdisc/issues"
+  },
+  "license": "MIT",
+  "icon": "assets/addurdisc/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "nya.tuyw.addurdisc.AddurDisc"
+    ],
+    "client": [
+      "nya.tuyw.addurdisc.AddurDiscClient"
+    ]
+  },
+  "mixins": [
+    "addurdisc.mixins.json",
+    {
+      "config": "addurdisc.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "1.20.6",
+    "java": ">=21",
+    "fabric-api": ">=0.100.8"
+  }
 }
