@@ -10,9 +10,9 @@ import net.minecraft.client.sounds.SoundBufferLibrary;
 import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.client.sounds.WeighedSoundEvents;
 import net.minecraft.core.BlockPos;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundSource;
-import net.minecraft.util.Util;
+import net.minecraft.Util;
 import net.minecraft.util.valueproviders.ConstantFloat;
 import net.minecraft.world.phys.Vec3;
 import nya.tuyw.addurdisc.AddurDisc;
@@ -32,13 +32,14 @@ final class ImportedDiscSoundInstance extends AbstractSoundInstance {
     private static final long TICK_NANOS = 50_000_000L;
     private static final int MAX_CATCH_UP_PASSES = 3;
 
+    private final WeighedSoundEvents soundEvent;
     private final Path source;
     private final long elapsedNanos;
     private final long announcedAtNanos;
     private volatile boolean cancelled;
     private AudioStream openedStream;
 
-    ImportedDiscSoundInstance(Identifier id, BlockPos pos, Path source, long elapsedTicks, long announcedAtNanos) {
+    ImportedDiscSoundInstance(ResourceLocation id, BlockPos pos, Path source, long elapsedTicks, long announcedAtNanos) {
         super(id, SoundSource.RECORDS, SoundInstance.createUnseededRandom());
         this.source = source;
         this.elapsedNanos = Math.clamp(elapsedTicks, 0L, MAX_ELAPSED_TICKS) * TICK_NANOS;
@@ -55,13 +56,13 @@ final class ImportedDiscSoundInstance extends AbstractSoundInstance {
     }
 
     @Override
-    public WeighedSoundEvents getOrResolve(SoundManager manager) {
+    public WeighedSoundEvents resolve(SoundManager manager) {
         return soundEvent;
     }
 
     /** Fabric routes streamed instances through this hook before consulting vanilla's file cache. */
     @Override
-    public CompletableFuture<AudioStream> getAudioStream(SoundBufferLibrary library, Identifier id, boolean loop) {
+    public CompletableFuture<AudioStream> getAudioStream(SoundBufferLibrary library, ResourceLocation id, boolean loop) {
         return CompletableFuture.supplyAsync(() -> {
             checkCancelled();
             try {

@@ -25,11 +25,4 @@ public class JukeboxBlockEntityMixin {
         }
     }
 
-    @Inject(method = "setRemoved", at = @At("HEAD"))
-    private void addurdisc$stopOnRemoval(CallbackInfo ci) {
-        JukeboxBlockEntity jukebox = (JukeboxBlockEntity) (Object) this;
-        if (jukebox.getLevel() instanceof ServerLevel level) {
-            DiscPlayback.stop(level, jukebox.getBlockPos());
-        }
-    }
 }

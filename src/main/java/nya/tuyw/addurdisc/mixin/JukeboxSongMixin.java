@@ -15,7 +15,7 @@ import java.util.Optional;
 /**
  * Makes an imported disc resolve to its track.
  *
- * <p>{@link JukeboxSong#fromStack(ItemStack)} is the single place vanilla asks a stack which song it
+ * <p>{@link JukeboxSong#fromStack(net.minecraft.core.HolderLookup.Provider, ItemStack)} is the single place vanilla asks a stack which song it
  * carries, so the jukebox insertion check, the comparator output, the song length and the tooltip all
  * follow whatever is returned here.</p>
  */
@@ -23,7 +23,7 @@ import java.util.Optional;
 public class JukeboxSongMixin {
 
     @Inject(method = "fromStack", at = @At("HEAD"), cancellable = true)
-    private static void addurdisc$useBoundSong(ItemStack stack,
+    private static void addurdisc$useBoundSong(net.minecraft.core.HolderLookup.Provider registries, ItemStack stack,
                                                CallbackInfoReturnable<Optional<Holder<JukeboxSong>>> cir) {
         SongBinding binding = stack.get(ModInitialize.DISC_SONG);
         if (binding != null && binding.isBound()) {
