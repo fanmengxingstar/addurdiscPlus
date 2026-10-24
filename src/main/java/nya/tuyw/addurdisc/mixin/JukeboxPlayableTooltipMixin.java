@@ -1,7 +1,6 @@
 package nya.tuyw.addurdisc.mixin;
 
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.component.DataComponentGetter;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
@@ -29,16 +28,6 @@ import java.util.function.Consumer;
  */
 @Mixin(JukeboxPlayable.class)
 public class JukeboxPlayableTooltipMixin {
-
-    /** A disc with a track says so in its own name, so the placeholder's hint line would mislead. */
-    @Inject(method = "addToTooltip", at = @At("HEAD"), cancellable = true)
-    private void addurdisc$hidePlaceholderTooltip(Item.TooltipContext context, Consumer<Component> lines,
-                                                  TooltipFlag flag, DataComponentGetter components,
-                                                  CallbackInfo ci) {
-        if (isPlayable(components.get(ModInitialize.DISC_SONG))) {
-            ci.cancel();
-        }
-    }
 
     /** @return whether a stored binding names a track that can actually be played */
     private static boolean isPlayable(SongBinding binding) {

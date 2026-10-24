@@ -36,4 +36,14 @@ public class CustomDiscItem extends Item {
         DiscPickers.open.accept(player, hand);
         return InteractionResult.SUCCESS;
     }
+    /** Older jukebox components cannot inspect the stack while adding their tooltip. */
+    @Override
+    public void appendHoverText(ItemStack stack, Item.TooltipContext context,
+                                java.util.List<Component> lines, net.minecraft.world.item.TooltipFlag flag) {
+        super.appendHoverText(stack, context, lines, flag);
+        SongBinding binding = stack.get(ModInitialize.DISC_SONG);
+        if (binding == null || !binding.isBound()) {
+            lines.add(Component.translatable("item.addurdisc.custom_disc.desc"));
+        }
+    }
 }
