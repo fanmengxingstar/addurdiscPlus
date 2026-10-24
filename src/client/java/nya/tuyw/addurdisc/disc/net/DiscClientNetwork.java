@@ -2,7 +2,6 @@ package nya.tuyw.addurdisc.disc.net;
 
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
-import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.chat.Component;
@@ -101,21 +100,21 @@ public final class DiscClientNetwork {
     private static int downloadAttempts;
 
     public static void register() {
-        ClientPlayNetworking.registerGlobalReceiver(UploadResult.TYPE, DiscClientNetwork::onUploadResult);
-        ClientPlayNetworking.registerGlobalReceiver(SongList.TYPE, DiscClientNetwork::onSongList);
-        ClientPlayNetworking.registerGlobalReceiver(DownloadStart.TYPE, DiscClientNetwork::onDownloadStart);
-        ClientPlayNetworking.registerGlobalReceiver(DownloadChunk.TYPE, DiscClientNetwork::onDownloadChunk);
-        ClientPlayNetworking.registerGlobalReceiver(PlaySong.TYPE, DiscClientNetwork::onPlaySong);
-        ClientPlayNetworking.registerGlobalReceiver(PlaybackState.TYPE, (payload, context) -> {
+        LegacyClientNetworking.registerGlobalReceiver(UploadResult.TYPE, DiscClientNetwork::onUploadResult);
+        LegacyClientNetworking.registerGlobalReceiver(SongList.TYPE, DiscClientNetwork::onSongList);
+        LegacyClientNetworking.registerGlobalReceiver(DownloadStart.TYPE, DiscClientNetwork::onDownloadStart);
+        LegacyClientNetworking.registerGlobalReceiver(DownloadChunk.TYPE, DiscClientNetwork::onDownloadChunk);
+        LegacyClientNetworking.registerGlobalReceiver(PlaySong.TYPE, DiscClientNetwork::onPlaySong);
+        LegacyClientNetworking.registerGlobalReceiver(PlaybackState.TYPE, (payload, context) -> {
             if (context.client().level != null
-                    && context.client().level.dimension().identifier().equals(payload.dimension())
+                    && context.client().level.dimension().location().equals(payload.dimension())
                     && payload.elapsedTicks() >= 0 && payload.elapsedTicks() <= Integer.MAX_VALUE) {
                 DiscClientSounds.play(payload.sound(), payload.pos(), payload.elapsedTicks());
             }
         });
-        ClientPlayNetworking.registerGlobalReceiver(StopSong.TYPE, (payload, context) -> {
+        LegacyClientNetworking.registerGlobalReceiver(StopSong.TYPE, (payload, context) -> {
             if (context.client().level != null
-                    && context.client().level.dimension().identifier().equals(payload.dimension())) {
+                    && context.client().level.dimension().location().equals(payload.dimension())) {
                 DiscClientSounds.stop(payload.pos());
             }
         });
@@ -173,16 +172,16 @@ public final class DiscClientNetwork {
         String suggestedName = TrackMetadata.suggestedName(fileName);
         String title = TrackMetadata.title(fileName);
         String sha1 = SongStore.sha1(sourceBytes);
-        Minecraft.getInstance().executeIfPossible(() -> queueUpload(
+        Minecraft.getInstance().execute(() -> queueUpload(
                 suggestedName, title, sourceBytes, sha1, hand, connection, watched));
     }
 
     private static void queueUpload(String suggestedName, String title, byte[] source, String sha1,
                                     InteractionHand hand, ClientPacketListener connection, ImportListener watched) {
         if (connection == null || Minecraft.getInstance().getConnection() != connection
-                || !ClientPlayNetworking.canSend(UploadStart.TYPE)) return;
+                || !LegacyClientNetworking.canSend(UploadStart.TYPE)) return;
         UUID transfer = UUID.randomUUID();
-        ClientPlayNetworking.send(new UploadStart(transfer, suggestedName, title, source.length,
+        LegacyClientNetworking.send(new UploadStart(transfer, suggestedName, title, source.length,
                 sha1, hand));
         OUTBOX.add(new PendingUpload(transfer, source));
         IMPORTS.put(transfer, watched);
@@ -196,7 +195,7 @@ public final class DiscClientNetwork {
             PendingUpload pending = OUTBOX.peek();
             int from = pending.offset;
             int to = Math.min(from + DiscProtocol.UPLOAD_CHUNK_BYTES, pending.data.length);
-            ClientPlayNetworking.send(new UploadChunk(pending.transfer, Arrays.copyOfRange(pending.data, from, to)));
+            LegacyClientNetworking.send(new UploadChunk(pending.transfer, Arrays.copyOfRange(pending.data, from, to)));
             pending.offset = to;
             budget--;
             if (to >= pending.data.length) {
@@ -213,7 +212,7 @@ public final class DiscClientNetwork {
         listener.report(message, true);
     }
 
-    private static void onUploadResult(UploadResult payload, ClientPlayNetworking.Context context) {
+    private static void onUploadResult(UploadResult payload, LegacyClientNetworking.Context context) {
         // A transfer the server already answered has nothing left to send; the chunks of a refused
         // one would only be ignored on the far end anyway.
         OUTBOX.removeIf(pending -> pending.transfer.equals(payload.transfer()));
@@ -231,11 +230,11 @@ public final class DiscClientNetwork {
     private static void tellPlayer(Component message) {
         Minecraft client = Minecraft.getInstance();
         if (client.player != null) {
-            client.gui.chatListener().handleSystemMessage(message, false);
+            client.player.displayClientMessage(message, false);
         }
     }
 
-    private static void onSongList(SongList payload, ClientPlayNetworking.Context context) {
+    private static void onSongList(SongList payload, LegacyClientNetworking.Context context) {
         long session = generation;
         for (SongInfo song : payload.songs()) {
             if (!DiscResources.isValidName(song.name()) || song.size() <= 0
@@ -245,7 +244,7 @@ public final class DiscClientNetwork {
             READY.remove(song.name());
             SYNC.execute(() -> {
                 boolean present = SongStore.hasUpToDate(song);
-                Minecraft.getInstance().executeIfPossible(() -> {
+                Minecraft.getInstance().execute(() -> {
                     if (session != generation || ANNOUNCED.get(song.name()) != song) return;
                     if (present) {
                         READY.add(song.name());
@@ -279,7 +278,7 @@ public final class DiscClientNetwork {
 
     private static void requestNext() {
         if (download != null || waitingFor != null || saving != null || Minecraft.getInstance().player == null
-                || !ClientPlayNetworking.canSend(RequestSong.TYPE)) {
+                || !LegacyClientNetworking.canSend(RequestSong.TYPE)) {
             return;
         }
         String next = WANTED.poll();
@@ -287,7 +286,7 @@ public final class DiscClientNetwork {
             return;
         }
         downloadAttempts = 0;
-        ClientPlayNetworking.send(new RequestSong(next));
+        LegacyClientNetworking.send(new RequestSong(next));
         waitFor(next);
     }
 
@@ -297,7 +296,7 @@ public final class DiscClientNetwork {
         deadline = System.currentTimeMillis() + DOWNLOAD_TIMEOUT_MILLIS;
     }
 
-    private static void onDownloadStart(DownloadStart payload, ClientPlayNetworking.Context context) {
+    private static void onDownloadStart(DownloadStart payload, LegacyClientNetworking.Context context) {
         // Only ever the answer to a request this side sent: a name nobody asked for would replace the
         // transfer in flight, and an announced size is what later chunks are allowed to fill up.
         if (!payload.name().equals(waitingFor) || !DiscResources.isValidName(payload.name())
@@ -313,7 +312,7 @@ public final class DiscClientNetwork {
         say(Component.translatable("addurdisc.message.sync_started"));
     }
 
-    private static void onDownloadChunk(DownloadChunk payload, ClientPlayNetworking.Context context) {
+    private static void onDownloadChunk(DownloadChunk payload, LegacyClientNetworking.Context context) {
         if (download == null || !download.name().equals(payload.name())) {
             return;
         }
@@ -353,7 +352,7 @@ public final class DiscClientNetwork {
                 failure = "could not be written to disk";
             }
             String reason = failure;
-            Minecraft.getInstance().executeIfPossible(() -> {
+            Minecraft.getInstance().execute(() -> {
                 if (session != generation) return;
                 saving = null;
                 if (reason != null) {
@@ -391,7 +390,7 @@ public final class DiscClientNetwork {
         waitingFor = null;
         if (++downloadAttempts < DOWNLOAD_ATTEMPTS && Minecraft.getInstance().player != null) {
             AddurDisc.LOGGER.warn("Nothing about {} yet, asking again.", name);
-            ClientPlayNetworking.send(new RequestSong(name));
+            LegacyClientNetworking.send(new RequestSong(name));
             waitFor(name);
             return;
         }
@@ -399,7 +398,7 @@ public final class DiscClientNetwork {
     }
 
     /** Backwards-compatible playback announcement from servers without progress synchronization. */
-    private static void onPlaySong(PlaySong payload, ClientPlayNetworking.Context context) {
+    private static void onPlaySong(PlaySong payload, LegacyClientNetworking.Context context) {
         DiscClientSounds.play(payload.sound(), payload.pos());
     }
 
