@@ -2,6 +2,7 @@ package nya.tuyw.addurdisc.disc.store;
 
 import nya.tuyw.addurdisc.AddurDisc;
 import nya.tuyw.addurdisc.config.ConfigUtil;
+import nya.tuyw.addurdisc.disc.DiscProtocol;
 import nya.tuyw.addurdisc.init.DiscResources;
 import nya.tuyw.addurdisc.util.OggVorbis;
 
@@ -60,6 +61,12 @@ public final class SongStore {
     }
 
     /** @return the track, or null when the file disappeared or shrank to nothing mid read */
+    public static SongInfo describe(String name) {
+        Path file = resolve(name);
+        return file != null && Files.isRegularFile(file) ? describe(name, file) : null;
+    }
+
+    /** Describes one resolved file without enumerating or hashing the rest of the library. */
     private static SongInfo describe(String name, Path file) {
         long size;
         long modified;
@@ -103,8 +110,11 @@ public final class SongStore {
         if (!exists(base)) {
             return base;
         }
-        for (int i = 2; i < 1000; i++) {
-            String candidate = base + "-" + i;
+        int lastSuffix = ConfigUtil.getMaxTracks() + 1;
+        for (int i = 2; i <= lastSuffix; i++) {
+            String suffix = "-" + i;
+            String candidate = base.substring(0, Math.min(base.length(), DiscProtocol.NAME_CHARS - suffix.length()))
+                    + suffix;
             if (DiscResources.isValidName(candidate) && !exists(candidate)) {
                 return candidate;
             }

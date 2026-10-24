@@ -4,6 +4,7 @@ import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.PlainTextButton;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.CommonColors;
 import net.minecraft.util.Util;
@@ -27,6 +28,7 @@ import java.util.concurrent.CompletableFuture;
  */
 public class MusicPickerScreen extends Screen implements DiscClientNetwork.ImportListener {
     private final InteractionHand hand;
+    private final ClientPacketListener connection;
     private Component message = Component.translatable("addurdisc.screen.hint");
     private boolean failed;
     /** True while the file chooser or source upload is being prepared. */
@@ -35,6 +37,7 @@ public class MusicPickerScreen extends Screen implements DiscClientNetwork.Impor
     public MusicPickerScreen(InteractionHand hand) {
         super(Component.translatable("addurdisc.screen.title").withStyle(ChatFormatting.BOLD));
         this.hand = hand;
+        this.connection = net.minecraft.client.Minecraft.getInstance().getConnection();
     }
 
     @Override
@@ -65,6 +68,7 @@ public class MusicPickerScreen extends Screen implements DiscClientNetwork.Impor
     /** Runs on the client thread, from inside a packet handler. */
     @Override
     public void report(Component message, boolean failed) {
+        if (failed) busy = false;
         show(message, failed);
     }
 
@@ -138,8 +142,7 @@ public class MusicPickerScreen extends Screen implements DiscClientNetwork.Impor
 
     private void uploadSource(Path source) {
         try {
-            DiscClientNetwork.upload(source, hand);
-            finish(Component.translatable("addurdisc.screen.uploading"), false);
+            DiscClientNetwork.upload(source, hand, connection, this);
         } catch (ImportFailedException | java.io.IOException e) {
             AddurDisc.LOGGER.warn("Could not import {}: {}", source.getFileName(), e.getMessage());
             finish(e instanceof ImportFailedException importFailed

@@ -4,10 +4,10 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
 import nya.tuyw.addurdisc.AddurDisc;
-import nya.tuyw.addurdisc.config.ConfigUtil;
 import nya.tuyw.addurdisc.disc.DiscClientSounds;
 import nya.tuyw.addurdisc.disc.DiscProtocol;
 import nya.tuyw.addurdisc.disc.audio.ImportFailedException;
@@ -15,6 +15,8 @@ import nya.tuyw.addurdisc.disc.audio.TrackMetadata;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.DownloadChunk;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.DownloadStart;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.PlaySong;
+import nya.tuyw.addurdisc.disc.net.DiscPayloads.PlaybackState;
+import nya.tuyw.addurdisc.disc.net.DiscPayloads.StopSong;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.RequestSong;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.SongList;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.UploadChunk;
@@ -32,11 +34,16 @@ import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Deque;
 import java.util.Map;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Client half of the disc protocol: uploads source media for server conversion, pulls what it does
- * not have, and reloads the generated pack once a track is in place.
+ * not have, and makes verified tracks available to the sound engine.
  */
 public final class DiscClientNetwork {
     /** How long a track may stay silent before the download is written off and tried again. */
@@ -74,6 +81,17 @@ public final class DiscClientNetwork {
     private static final Deque<String> WANTED = new ArrayDeque<>();
     /** Source files waiting for their turn to leave on the wire. */
     private static final Deque<PendingUpload> OUTBOX = new ArrayDeque<>();
+    private static final Map<UUID, ImportListener> IMPORTS = new HashMap<>();
+    private static final Map<String, SongInfo> ANNOUNCED = new HashMap<>();
+    private static final Set<String> READY = new HashSet<>();
+    private static final ExecutorService SYNC = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "addurdisc-client-sync");
+        thread.setDaemon(true);
+        return thread;
+    });
+    /** Invalidates file checks and prepared uploads when their connection has gone away. */
+    private static volatile long generation;
+    private static String saving;
 
     private static ChunkAssembler download;
     /** Track asked for whose {@code DownloadStart} has not arrived yet, or null once it has. */
@@ -88,6 +106,19 @@ public final class DiscClientNetwork {
         ClientPlayNetworking.registerGlobalReceiver(DownloadStart.TYPE, DiscClientNetwork::onDownloadStart);
         ClientPlayNetworking.registerGlobalReceiver(DownloadChunk.TYPE, DiscClientNetwork::onDownloadChunk);
         ClientPlayNetworking.registerGlobalReceiver(PlaySong.TYPE, DiscClientNetwork::onPlaySong);
+        ClientPlayNetworking.registerGlobalReceiver(PlaybackState.TYPE, (payload, context) -> {
+            if (context.client().level != null
+                    && context.client().level.dimension().identifier().equals(payload.dimension())
+                    && payload.elapsedTicks() >= 0 && payload.elapsedTicks() <= Integer.MAX_VALUE) {
+                DiscClientSounds.play(payload.sound(), payload.pos(), payload.elapsedTicks());
+            }
+        });
+        ClientPlayNetworking.registerGlobalReceiver(StopSong.TYPE, (payload, context) -> {
+            if (context.client().level != null
+                    && context.client().level.dimension().identifier().equals(payload.dimension())) {
+                DiscClientSounds.stop(payload.pos());
+            }
+        });
         // A server that stops answering would otherwise leave this side waiting forever: the queue
         // would stay full and every later track would quietly never arrive. The same tick also
         // feeds the upload outbox, which is what keeps big imports off the frame budget.
@@ -98,6 +129,11 @@ public final class DiscClientNetwork {
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             WANTED.clear();
             OUTBOX.clear();
+            IMPORTS.clear();
+            ANNOUNCED.clear();
+            READY.clear();
+            generation++;
+            saving = null;
             download = null;
             waitingFor = null;
             deadline = 0L;
@@ -118,7 +154,8 @@ public final class DiscClientNetwork {
     }
 
     /** Reads and hashes the picked source off-thread; the server performs the audio conversion. */
-    public static void upload(Path source, InteractionHand hand) throws IOException, ImportFailedException {
+    public static void upload(Path source, InteractionHand hand, ClientPacketListener connection, ImportListener watched)
+            throws IOException, ImportFailedException {
         long size = Files.isRegularFile(source) ? Files.size(source) : 0L;
         if (size <= 0L) {
             throw new ImportFailedException(source.getFileName() + " does not exist or is empty.");
@@ -137,16 +174,19 @@ public final class DiscClientNetwork {
         String title = TrackMetadata.title(fileName);
         String sha1 = SongStore.sha1(sourceBytes);
         Minecraft.getInstance().executeIfPossible(() -> queueUpload(
-                suggestedName, title, sourceBytes, sha1, hand));
+                suggestedName, title, sourceBytes, sha1, hand, connection, watched));
     }
 
     private static void queueUpload(String suggestedName, String title, byte[] source, String sha1,
-                                    InteractionHand hand) {
+                                    InteractionHand hand, ClientPacketListener connection, ImportListener watched) {
+        if (connection == null || Minecraft.getInstance().getConnection() != connection
+                || !ClientPlayNetworking.canSend(UploadStart.TYPE)) return;
         UUID transfer = UUID.randomUUID();
         ClientPlayNetworking.send(new UploadStart(transfer, suggestedName, title, source.length,
                 sha1, hand));
         OUTBOX.add(new PendingUpload(transfer, source));
-        say(Component.translatable("addurdisc.screen.uploading"));
+        IMPORTS.put(transfer, watched);
+        if (listener == watched) say(Component.translatable("addurdisc.screen.uploading"));
     }
 
     /** Sends a fixed number of queued upload chunks per client tick. */
@@ -177,14 +217,14 @@ public final class DiscClientNetwork {
         // A transfer the server already answered has nothing left to send; the chunks of a refused
         // one would only be ignored on the far end anyway.
         OUTBOX.removeIf(pending -> pending.transfer.equals(payload.transfer()));
+        ImportListener watched = IMPORTS.remove(payload.transfer());
+        if (watched == null) return;
         if (!payload.success()) {
-            warn(Component.translatable(payload.failure().langKey()));
+            if (listener == watched) watched.report(Component.translatable(payload.failure().langKey()), true);
             return;
         }
-        DiscResources.refresh();
-        reload();
         tellPlayer(Component.translatable("addurdisc.screen.imported"));
-        listener.onImported();
+        if (listener == watched) watched.onImported();
     }
 
     /** Says something in the chat, which like the disc itself outlives the import screen. */
@@ -196,11 +236,32 @@ public final class DiscClientNetwork {
     }
 
     private static void onSongList(SongList payload, ClientPlayNetworking.Context context) {
+        long session = generation;
         for (SongInfo song : payload.songs()) {
-            if (song.size() <= ConfigUtil.getMaxSongBytes() && !SongStore.hasUpToDate(song)) {
-                request(song.name());
-            }
+            if (!DiscResources.isValidName(song.name()) || song.size() <= 0
+                    || song.size() > DiscProtocol.MAX_DOWNLOAD_BYTES
+                    || !song.sha1().matches("[0-9a-f]{40}")) continue;
+            ANNOUNCED.put(song.name(), song);
+            READY.remove(song.name());
+            SYNC.execute(() -> {
+                boolean present = SongStore.hasUpToDate(song);
+                Minecraft.getInstance().executeIfPossible(() -> {
+                    if (session != generation || ANNOUNCED.get(song.name()) != song) return;
+                    if (present) {
+                        READY.add(song.name());
+                        WANTED.remove(song.name());
+                        DiscClientSounds.playWaiting();
+                    } else {
+                        request(song.name());
+                    }
+                });
+            });
         }
+    }
+
+    /** A file from a different server with the same name must not play before its digest is checked. */
+    public static boolean isReady(String name) {
+        return READY.contains(name);
     }
 
     /**
@@ -208,14 +269,17 @@ public final class DiscClientNetwork {
      * while the link is busy simply waits for its turn.
      */
     public static void request(String name) {
-        if (DiscResources.isValidName(name) && !WANTED.contains(name)) {
+        if (DiscResources.isValidName(name) && !READY.contains(name) && !name.equals(waitingFor)
+                && (download == null || !name.equals(download.name())) && !name.equals(saving)
+                && !WANTED.contains(name)) {
             WANTED.add(name);
         }
         requestNext();
     }
 
     private static void requestNext() {
-        if (download != null || waitingFor != null || Minecraft.getInstance().player == null) {
+        if (download != null || waitingFor != null || saving != null || Minecraft.getInstance().player == null
+                || !ClientPlayNetworking.canSend(RequestSong.TYPE)) {
             return;
         }
         String next = WANTED.poll();
@@ -237,7 +301,7 @@ public final class DiscClientNetwork {
         // Only ever the answer to a request this side sent: a name nobody asked for would replace the
         // transfer in flight, and an announced size is what later chunks are allowed to fill up.
         if (!payload.name().equals(waitingFor) || !DiscResources.isValidName(payload.name())
-                || payload.size() <= 0 || payload.size() > ConfigUtil.getMaxSongBytes()
+                || payload.size() <= 0 || payload.size() > DiscProtocol.MAX_DOWNLOAD_BYTES
                 || payload.sha1() == null || !payload.sha1().matches("[0-9a-fA-F]{40}")) {
             AddurDisc.LOGGER.warn("Ignored the sync offer for {}, which was not asked for.", payload.name());
             return;
@@ -271,26 +335,37 @@ public final class DiscClientNetwork {
             return;
         }
         byte[] ogg = download.bytes();
+        String sha1 = downloadSha1;
+        long session = generation;
         download = null;
-        if (!downloadSha1.isEmpty() && !SongStore.sha1(ogg).equals(downloadSha1)) {
-            giveUpDownload(payload.name(), "did not match its announced digest");
-            return;
-        }
-        try {
-            SongStore.write(payload.name(), ogg);
-        } catch (IOException e) {
-            AddurDisc.LOGGER.error("Could not store the synced track {}", payload.name(), e);
-            giveUpDownload(payload.name(), "could not be written to disk");
-            return;
-        }
-        DiscResources.refresh();
-        say(Component.translatable("addurdisc.message.sync_done"));
-        if (WANTED.isEmpty()) {
-            // One re-read for the whole batch, which is what a join with several tracks to fetch costs.
-            reload();
-        } else {
-            requestNext();
-        }
+        saving = payload.name();
+        SYNC.execute(() -> {
+            String failure = null;
+            try {
+                if (!SongStore.sha1(ogg).equals(sha1)) {
+                    failure = "did not match its announced digest";
+                } else if (session == generation) {
+                    SongStore.write(payload.name(), ogg);
+                    DiscResources.refresh();
+                }
+            } catch (IOException | RuntimeException e) {
+                AddurDisc.LOGGER.error("Could not store the synced track {}", payload.name(), e);
+                failure = "could not be written to disk";
+            }
+            String reason = failure;
+            Minecraft.getInstance().executeIfPossible(() -> {
+                if (session != generation) return;
+                saving = null;
+                if (reason != null) {
+                    giveUpDownload(payload.name(), reason);
+                    return;
+                }
+                READY.add(payload.name());
+                say(Component.translatable("addurdisc.message.sync_done"));
+                DiscClientSounds.playWaiting();
+                requestNext();
+            });
+        });
     }
 
     private static void giveUpDownload(String name, String reason) {
@@ -323,15 +398,7 @@ public final class DiscClientNetwork {
         giveUpDownload(name, "the server stopped answering");
     }
 
-    /**
-     * Lets the sound engine hear the tracks that arrived since it last read the pack, and starts the
-     * songs that were announced while their track was still on its way.
-     */
-    private static void reload() {
-        DiscClientSounds.reloadSoundDefinitions();
-        DiscClientSounds.playWaiting();
-    }
-
+    /** Backwards-compatible playback announcement from servers without progress synchronization. */
     private static void onPlaySong(PlaySong payload, ClientPlayNetworking.Context context) {
         DiscClientSounds.play(payload.sound(), payload.pos());
     }

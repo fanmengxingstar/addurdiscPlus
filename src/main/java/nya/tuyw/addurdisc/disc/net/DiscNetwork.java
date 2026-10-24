@@ -3,6 +3,8 @@ package nya.tuyw.addurdisc.disc.net;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Util;
@@ -18,6 +20,8 @@ import nya.tuyw.addurdisc.disc.net.DiscPayloads.DownloadChunk;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.DownloadStart;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.Failure;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.PlaySong;
+import nya.tuyw.addurdisc.disc.net.DiscPayloads.PlaybackState;
+import nya.tuyw.addurdisc.disc.net.DiscPayloads.StopSong;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.RequestSong;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.SongList;
 import nya.tuyw.addurdisc.disc.net.DiscPayloads.UploadChunk;
@@ -38,11 +42,13 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Server half of the disc protocol. The server owns the sounds folder, so an imported track only
@@ -70,12 +76,9 @@ public final class DiscNetwork {
     /** Download burst a player gets before the sustained rate above starts to apply. */
     private static final long DOWNLOAD_BURST_BYTES = 2L * 1024 * 1024;
 
-    private static final Map<UUID, Upload> UPLOADS = new HashMap<>();
-    private static final Map<UUID, RequestLog> REQUESTS = new HashMap<>();
-    /** Players with a track currently streaming to them; one download at a time per player. */
-    private static final Set<UUID> DOWNLOADING = ConcurrentHashMap.newKeySet();
-    private static final Map<UUID, DownloadThrottle> THROTTLES = new ConcurrentHashMap<>();
-    private static long bytesInFlight;
+    private static final long UPLOAD_TIMEOUT_NANOS = 30_000_000_000L;
+    /** Each integrated server owns its transfers, including callbacks still finishing after stop. */
+    private static final Map<MinecraftServer, Transfers> TRANSFERS = new HashMap<>();
 
     /**
      * One daemon thread for every write into the sounds folder. Imports are rare but each moves up
@@ -98,6 +101,8 @@ public final class DiscNetwork {
         PayloadTypeRegistry.clientboundPlay().register(DownloadStart.TYPE, DownloadStart.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(DownloadChunk.TYPE, DownloadChunk.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(PlaySong.TYPE, PlaySong.STREAM_CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(PlaybackState.TYPE, PlaybackState.STREAM_CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(StopSong.TYPE, StopSong.STREAM_CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(UploadStart.TYPE, DiscNetwork::onUploadStart);
         ServerPlayNetworking.registerGlobalReceiver(UploadChunk.TYPE, DiscNetwork::onUploadChunk);
@@ -105,7 +110,7 @@ public final class DiscNetwork {
 
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
             if (ServerPlayNetworking.canSend(handler.getPlayer(), SongList.TYPE)) {
-                Util.backgroundExecutor().execute(() -> {
+                Util.ioPool().execute(() -> {
                     List<SongList> pages = DiscPayloads.pagesOf(SongStore.scan());
                     server.execute(() -> pages.forEach(page -> send(handler.getPlayer(), page)));
                 });
@@ -113,11 +118,40 @@ public final class DiscNetwork {
         });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             UUID id = handler.getPlayer().getUUID();
-            finishUpload(id);
-            REQUESTS.remove(id);
-            DOWNLOADING.remove(id);
-            THROTTLES.remove(id);
+            Transfers state = TRANSFERS.get(server);
+            if (state == null) return;
+            finishUpload(state, id);
+            state.requests.remove(id);
+            state.downloads.remove(handler.getPlayer());
+            state.throttles.remove(handler.getPlayer());
         });
+        ServerTickEvents.END_SERVER_TICK.register(server -> {
+            if (server.getTickCount() % 20 != 0) return;
+            Transfers state = transfers(server);
+            long now = System.nanoTime();
+            for (UUID id : List.copyOf(state.uploads.keySet())) {
+                Upload upload = state.uploads.get(id);
+                if (!state.jobs.containsKey(upload) && now - upload.lastActivity().get() > UPLOAD_TIMEOUT_NANOS) {
+                    finishUpload(state, id);
+                    ServerPlayer player = server.getPlayerList().getPlayer(id);
+                    if (player != null) fail(player, upload.transfer(), Failure.BUSY);
+                }
+            }
+        });
+        ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+            Transfers state = TRANSFERS.remove(server);
+            if (state != null) {
+                state.active = false;
+                state.jobs.values().forEach(job -> job.cancel(true));
+                for (UUID id : List.copyOf(state.uploads.keySet())) finishUpload(state, id);
+                state.downloads.clear();
+            }
+            DiscPlayback.clear(server);
+        });
+    }
+
+    private static Transfers transfers(MinecraftServer server) {
+        return TRANSFERS.computeIfAbsent(server, key -> new Transfers());
     }
 
     private static void onUploadStart(UploadStart payload, ServerPlayNetworking.Context context) {
@@ -137,10 +171,10 @@ public final class DiscNetwork {
             return;
         }
         UUID id = player.getUUID();
-        if (UPLOADS.containsKey(id)) {
+        Transfers state = transfers(context.server());
+        if (state.uploads.containsKey(id)) {
             // Two transfers at once would otherwise have the second one's bytes stored under the
             // first one's name, because both are keyed on the player rather than the transfer.
-            finishUpload(id);
             fail(player, payload.transfer(), Failure.BUSY);
             return;
         }
@@ -152,15 +186,15 @@ public final class DiscNetwork {
             fail(player, payload.transfer(), Failure.TOO_MANY_TRACKS);
             return;
         }
-        if (payload.size() > UPLOAD_BUDGET - bytesInFlight) {
+        if (payload.size() > UPLOAD_BUDGET - state.bytesInFlight.get()) {
             fail(player, payload.transfer(), Failure.BUSY);
             return;
         }
         try {
             UploadAssembler assembler = new UploadAssembler(payload.suggestedName(), payload.size());
-            bytesInFlight += payload.size();
-            UPLOADS.put(id, new Upload(payload.transfer(), payload.hand(), player.getItemInHand(payload.hand()),
-                    payload.sha1(), payload.title(), assembler));
+            state.bytesInFlight.addAndGet(payload.size());
+            state.uploads.put(id, new Upload(payload.transfer(), payload.hand(), player.getItemInHand(payload.hand()),
+                    payload.sha1(), payload.title(), assembler, state, new AtomicBoolean(), new AtomicLong(System.nanoTime())));
         } catch (IOException e) {
             AddurDisc.LOGGER.warn("Could not create a temporary upload for {}", describe(player), e);
             fail(player, payload.transfer(), Failure.STORAGE_FAILED);
@@ -175,19 +209,22 @@ public final class DiscNetwork {
     private static void onUploadChunk(UploadChunk payload, ServerPlayNetworking.Context context) {
         ServerPlayer player = context.player();
         UUID id = player.getUUID();
-        Upload upload = UPLOADS.get(id);
+        Transfers state = transfers(context.server());
+        Upload upload = state.uploads.get(id);
         if (upload == null || !upload.transfer().equals(payload.transfer())) {
             // Chunks of a transfer that was replaced or already finished. Nothing to answer.
             return;
         }
+        if (state.jobs.containsKey(upload)) return;
+        upload.lastActivity().set(System.nanoTime());
         try {
             if (!upload.assembler().accept(payload.bytes())) {
-                finishUpload(id);
+                finishUpload(state, id);
                 fail(player, payload.transfer(), Failure.CORRUPT);
                 return;
             }
         } catch (IOException e) {
-            finishUpload(id);
+            finishUpload(state, id);
             AddurDisc.LOGGER.error("Could not receive the upload from {}", describe(player), e);
             fail(player, payload.transfer(), Failure.STORAGE_FAILED);
             return;
@@ -197,7 +234,6 @@ public final class DiscNetwork {
         }
         // Keep the size reservation through conversion so a busy store thread cannot accumulate
         // an unbounded pile of source files on disk.
-        UPLOADS.remove(id);
         try {
             store(context, upload, upload.assembler().finish());
         } catch (RuntimeException e) {
@@ -206,11 +242,13 @@ public final class DiscNetwork {
             AddurDisc.LOGGER.error("Could not finish the import from {}.", describe(player), e);
             closeUpload(upload);
             releaseUploadBudget(upload);
+            state.uploads.remove(id, upload);
             fail(player, upload.transfer(), Failure.STORAGE_FAILED);
         } catch (IOException e) {
             AddurDisc.LOGGER.error("Could not finish receiving the upload from {}.", describe(player), e);
             closeUpload(upload);
             releaseUploadBudget(upload);
+            state.uploads.remove(id, upload);
             fail(player, upload.transfer(), Failure.STORAGE_FAILED);
         }
     }
@@ -230,22 +268,26 @@ public final class DiscNetwork {
         if (held != upload.expectedStack() || !held.is(ModInitialize.CUSTOM_DISC)) {
             deleteSource(source);
             releaseUploadBudget(upload);
+            upload.state().uploads.remove(player.getUUID(), upload);
             fail(player, upload.transfer(), Failure.NO_DISC);
             return;
         }
-        STORE.execute(() -> storeOnDisk(server, player, upload, source));
+        Future<?> task = STORE.submit(() -> storeOnDisk(server, player, upload, source));
+        upload.state().jobs.put(upload, task);
     }
 
     /** Runs conversion and storage off the server tick. */
     private static void storeOnDisk(MinecraftServer server, ServerPlayer player, Upload upload, Path source) {
         SongInfo stored;
         try {
+            if (!upload.state().active || player.hasDisconnected()) return;
             if (!SongStore.sha1(source).equals(upload.sha1())) {
                 server.execute(() -> fail(player, upload.transfer(), Failure.CORRUPT));
                 return;
             }
             AudioImporter.Converted converted = AudioImporter.convertFile(source,
                     upload.assembler().name(), upload.title());
+            if (!upload.state().active || Thread.currentThread().isInterrupted()) return;
             byte[] ogg = converted.ogg();
             if (ogg.length > ConfigUtil.getMaxSongBytes()) {
                 server.execute(() -> fail(player, upload.transfer(), Failure.TOO_LARGE));
@@ -279,10 +321,19 @@ public final class DiscNetwork {
                     ? Failure.TOO_LARGE : Failure.CONVERSION_FAILED;
             server.execute(() -> fail(player, upload.transfer(), failure));
             return;
+        } catch (RuntimeException e) {
+            AddurDisc.LOGGER.error("Could not finish storing the upload from {}", describe(player), e);
+            server.execute(() -> fail(player, upload.transfer(), Failure.STORAGE_FAILED));
+            return;
         } finally {
             deleteSource(source);
-            server.execute(() -> releaseUploadBudget(upload));
+            releaseUploadBudget(upload);
+            server.execute(() -> {
+                upload.state().uploads.remove(player.getUUID(), upload);
+                upload.state().jobs.remove(upload);
+            });
         }
+        if (!upload.state().active) return;
         if (!OggVorbis.isPlayableVorbis(SongStore.resolve(stored.name()))) {
             // A matching digest only proves the bytes are the ones the client sent, not that they
             // are audio; garbage would otherwise be served to every other player from here.
@@ -297,8 +348,9 @@ public final class DiscNetwork {
 
     /** Runs back on the server thread: the game-state half of a finished import. */
     private static void bindImportedDisc(MinecraftServer server, ServerPlayer player, Upload upload, SongInfo stored) {
+        if (!upload.state().active) return;
         ItemStack held = player.getItemInHand(upload.hand());
-        if (held == upload.expectedStack() && held.is(ModInitialize.CUSTOM_DISC)) {
+        if (!player.hasDisconnected() && held == upload.expectedStack() && held.is(ModInitialize.CUSTOM_DISC)) {
             held.set(ModInitialize.DISC_SONG, new SongBinding(stored.name(), stored.lengthInSeconds(), upload.title()));
             player.inventoryMenu.broadcastChanges();
         } else {
@@ -320,24 +372,14 @@ public final class DiscNetwork {
                 || payload.name() == null || !DiscResources.isValidName(payload.name())) {
             return;
         }
-        if (!allowRequest(player.getUUID())) {
-            AddurDisc.LOGGER.warn("{} is asking for tracks faster than a sync should.", describe(player));
-            return;
-        }
-        if (!DOWNLOADING.add(player.getUUID())) {
-            // One download at a time per player. A well behaved client asks sequentially, so a
-            // second request only ever comes from a modified client, and dropping it is enough.
-            return;
-        }
-        SongInfo wanted = find(payload.name());
-        if (wanted == null || wanted.size() > ConfigUtil.getMaxSongBytes()) {
-            DOWNLOADING.remove(player.getUUID());
-            AddurDisc.LOGGER.warn("{} asked for the unknown track {}.", describe(player), payload.name());
-            return;
-        }
-        send(player, new DownloadStart(wanted.name(), wanted.size(), wanted.sha1(), wanted.lengthInSeconds()));
+        Transfers state = transfers(context.server());
+        DownloadThrottle throttle = state.throttles.computeIfAbsent(player, key -> new DownloadThrottle());
+        Download transfer = new Download(throttle);
+        // The connection object owns the reservation: an old worker cannot release a reconnect's slot.
+        if (state.downloads.putIfAbsent(player, transfer) != null) return;
+        long delay = requestDelay(state, player.getUUID());
         MinecraftServer server = context.server();
-        Util.backgroundExecutor().execute(() -> streamTrack(server, player, wanted));
+        Util.ioPool().execute(() -> streamTrack(server, state, player, payload.name(), transfer, delay));
     }
 
     /**
@@ -347,44 +389,74 @@ public final class DiscNetwork {
      * state and is only safe from the server's own thread; the encoding itself then still happens
      * on the netty event loop, off both.
      */
-    private static void streamTrack(MinecraftServer server, ServerPlayer player, SongInfo wanted) {
-        try (InputStream stream = SongStore.open(wanted.name())) {
-            DownloadThrottle throttle = THROTTLES.computeIfAbsent(player.getUUID(), key -> new DownloadThrottle());
-            byte[] buffer = new byte[DiscProtocol.DOWNLOAD_CHUNK_BYTES];
-            long sent = 0;
-            int read;
-            while ((read = stream.read(buffer)) > 0) {
-                if (player.hasDisconnected()) {
-                    // Nobody is listening any more; stop before another read, not after another
-                    // megabyte of packets to a dead connection.
-                    return;
+    private static void streamTrack(MinecraftServer server, Transfers state, ServerPlayer player,
+                                    String name, Download transfer, long delay) {
+        try {
+            if (delay > 0) Thread.sleep(delay);
+            if (!state.active || player.hasDisconnected() || state.downloads.get(player) != transfer) return;
+            SongInfo wanted = SongStore.describe(name);
+            if (wanted == null || wanted.size() > ConfigUtil.getMaxSongBytes()) return;
+            server.execute(() -> {
+                if (state.active && state.downloads.get(player) == transfer) {
+                    send(player, new DownloadStart(wanted.name(), wanted.size(), wanted.sha1(), wanted.lengthInSeconds()));
                 }
-                sent += read;
-                final long left = Math.max(wanted.size() - sent, 0);
-                final byte[] chunk = read == buffer.length ? buffer.clone() : Arrays.copyOf(buffer, read);
-                throttle.acquire(chunk.length);
-            server.execute(() -> send(player, new DownloadChunk(wanted.name(), chunk, (int) left)));
+            });
+            try (InputStream stream = SongStore.open(wanted.name())) {
+                byte[] buffer = new byte[DiscProtocol.DOWNLOAD_CHUNK_BYTES];
+                long sent = 0;
+                int read;
+                while ((read = stream.read(buffer)) > 0) {
+                    if (!state.active || player.hasDisconnected() || state.downloads.get(player) != transfer) {
+                        return;
+                    }
+                    sent += read;
+                    final long left = Math.max(wanted.size() - sent, 0);
+                    final byte[] chunk = read == buffer.length ? buffer.clone() : Arrays.copyOf(buffer, read);
+                    transfer.throttle.acquire(chunk.length);
+                    // At most one chunk waits for the server tick per download, bounding the
+                    // executor queue even when a server tick stalls.
+                    var delivery = server.submit(() -> {
+                        if (state.active && state.downloads.get(player) == transfer) {
+                            // A client can ask again before this worker resumes after the last send.
+                            if (left == 0) state.downloads.remove(player, transfer);
+                            send(player, new DownloadChunk(wanted.name(), chunk, (int) left));
+                        }
+                    });
+                    while (state.active && !player.hasDisconnected()) {
+                        try {
+                            delivery.get(1, java.util.concurrent.TimeUnit.SECONDS);
+                            break;
+                        } catch (java.util.concurrent.TimeoutException ignored) {
+                            // Recheck cancellation if the server stopped before running the callback.
+                        }
+                    }
+                }
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            AddurDisc.LOGGER.debug("Stopped streaming {} to {}.", wanted.name(), describe(player));
-        } catch (IOException e) {
-            AddurDisc.LOGGER.warn("Could not send the track {} to {}", wanted.name(), describe(player), e);
+            AddurDisc.LOGGER.debug("Stopped streaming {} to {}.", name, describe(player));
+        } catch (IOException | java.util.concurrent.ExecutionException e) {
+            AddurDisc.LOGGER.warn("Could not send the track {} to {}", name, describe(player), e);
         } finally {
-            DOWNLOADING.remove(player.getUUID());
+            state.downloads.remove(player, transfer);
         }
     }
 
-    private static void finishUpload(UUID id) {
-        Upload removed = UPLOADS.remove(id);
+    private static void finishUpload(Transfers state, UUID id) {
+        Upload removed = state.uploads.remove(id);
         if (removed != null) {
+            Future<?> job = state.jobs.remove(removed);
+            if (job != null) job.cancel(true);
             releaseUploadBudget(removed);
+            // A cancelled queued job never enters storeOnDisk's finally block.
             closeUpload(removed);
         }
     }
 
     private static void releaseUploadBudget(Upload upload) {
-        bytesInFlight = Math.max(0, bytesInFlight - upload.assembler().expectedBytes());
+        if (upload.released().compareAndSet(false, true)) {
+            upload.state().bytesInFlight.addAndGet(-upload.assembler().expectedBytes());
+        }
     }
 
     private static void closeUpload(Upload upload) {
@@ -417,6 +489,8 @@ public final class DiscNetwork {
         if (payload instanceof DownloadStart && !ServerPlayNetworking.canSend(player, DownloadStart.TYPE)) return;
         if (payload instanceof DownloadChunk && !ServerPlayNetworking.canSend(player, DownloadChunk.TYPE)) return;
         if (payload instanceof PlaySong && !ServerPlayNetworking.canSend(player, PlaySong.TYPE)) return;
+        if (payload instanceof PlaybackState && !ServerPlayNetworking.canSend(player, PlaybackState.TYPE)) return;
+        if (payload instanceof StopSong && !ServerPlayNetworking.canSend(player, StopSong.TYPE)) return;
         ServerPlayNetworking.send(player, payload);
     }
 
@@ -424,31 +498,44 @@ public final class DiscNetwork {
         return player.getScoreboardName();
     }
 
-    private static SongInfo find(String name) {
-        for (SongInfo song : SongStore.scan()) {
-            if (song.name().equals(name)) {
-                return song;
-            }
-        }
-        return null;
-    }
-
-    private static boolean allowRequest(UUID id) {
-        long now = System.currentTimeMillis();
-        RequestLog log = REQUESTS.computeIfAbsent(id, key -> new RequestLog(now, 0));
+    /** Pace legitimate sequential requests instead of dropping the ninth track for fifteen seconds. */
+    private static long requestDelay(Transfers state, UUID id) {
+        long now = System.nanoTime() / 1_000_000L;
+        RequestLog log = state.requests.computeIfAbsent(id, key -> new RequestLog(now, 0));
         if (now - log.windowStart() >= REQUEST_WINDOW_MILLIS) {
-            REQUESTS.put(id, new RequestLog(now, 1));
-            return true;
+            state.requests.put(id, new RequestLog(now, 1));
+            return 0;
         }
         if (log.count() >= REQUESTS_PER_SECOND) {
-            return false;
+            long nextWindow = log.windowStart() + REQUEST_WINDOW_MILLIS;
+            state.requests.put(id, new RequestLog(nextWindow, 1));
+            return Math.max(0, nextWindow - now);
         }
-        REQUESTS.put(id, new RequestLog(log.windowStart(), log.count() + 1));
-        return true;
+        state.requests.put(id, new RequestLog(log.windowStart(), log.count() + 1));
+        return Math.max(0, log.windowStart() - now);
     }
 
     private record Upload(UUID transfer, InteractionHand hand, ItemStack expectedStack, String sha1,
-                          String title, UploadAssembler assembler) {
+                          String title, UploadAssembler assembler, Transfers state,
+                          AtomicBoolean released, AtomicLong lastActivity) {
+    }
+
+    private static final class Transfers {
+        private final Map<UUID, Upload> uploads = new HashMap<>();
+        private final Map<UUID, RequestLog> requests = new HashMap<>();
+        private final Map<Upload, Future<?>> jobs = new HashMap<>();
+        private final Map<ServerPlayer, Download> downloads = new ConcurrentHashMap<>();
+        private final Map<ServerPlayer, DownloadThrottle> throttles = new HashMap<>();
+        private final AtomicLong bytesInFlight = new AtomicLong();
+        private volatile boolean active = true;
+    }
+
+    private static final class Download {
+        private final DownloadThrottle throttle;
+
+        private Download(DownloadThrottle throttle) {
+            this.throttle = throttle;
+        }
     }
 
     private record RequestLog(long windowStart, int count) {
@@ -466,7 +553,11 @@ public final class DiscNetwork {
         synchronized void acquire(long bytes) throws InterruptedException {
             while (true) {
                 long now = System.nanoTime();
-                long refilled = (now - lastRefillNanos) * DOWNLOAD_BYTES_PER_SECOND / 1_000_000_000L;
+                long elapsed = Math.max(0L, now - lastRefillNanos);
+                // Once a full bucket could refill, multiplying a long idle interval is unnecessary
+                // and would overflow after roughly nine minutes.
+                long refilled = elapsed >= 1_000_000_000L
+                        ? DOWNLOAD_BURST_BYTES : elapsed * DOWNLOAD_BYTES_PER_SECOND / 1_000_000_000L;
                 if (refilled > 0) {
                     available = Math.min(available + refilled, DOWNLOAD_BURST_BYTES);
                     lastRefillNanos = now;

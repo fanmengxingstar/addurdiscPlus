@@ -9,6 +9,9 @@ public final class DiscProtocol {
     /** Largest uncompressed source file accepted for conversion by the server. */
     public static final long MAX_UPLOAD_SOURCE_BYTES = 200L * 1024 * 1024;
 
+    /** Server configuration caps converted tracks at 128 MiB, irrespective of a client's own quota. */
+    public static final long MAX_DOWNLOAD_BYTES = 128L * 1024 * 1024;
+
     /**
      * Chunk payload size going up. A serverbound custom payload rides an unknown-channel packet, and
      * vanilla caps those at 32767 bytes, so anything larger is dropped or read back wrong. A single

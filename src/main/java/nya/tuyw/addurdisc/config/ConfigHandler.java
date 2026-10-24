@@ -109,17 +109,25 @@ public final class ConfigHandler {
         if (name.isBlank() || name.equals(".") || name.equals("..")) {
             return false;
         }
-        return name.indexOf('/') < 0 && name.indexOf('\\') < 0 && name.indexOf('\0') < 0
-                && name.indexOf(':') < 0;
+        if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0 || name.indexOf('\0') >= 0
+                || name.indexOf(':') >= 0) {
+            return false;
+        }
+        try {
+            Path path = Path.of(name);
+            return path.getRoot() == null && path.getNameCount() == 1;
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     private static boolean isSafeRelativePath(String value) {
         if (value.isBlank()) {
-            return true;
+            return value.isEmpty();
         }
         try {
             Path path = Path.of(value);
-            if (path.isAbsolute()) {
+            if (path.getRoot() != null) {
                 return false;
             }
             for (Path part : path) {

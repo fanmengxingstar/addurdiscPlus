@@ -28,6 +28,8 @@ public class JukeboxSongMixin {
         SongBinding binding = stack.get(ModInitialize.DISC_SONG);
         if (binding != null && binding.isBound()) {
             cir.setReturnValue(Optional.of(binding.asSong()));
+        } else if (stack.is(ModInitialize.CUSTOM_DISC)) {
+            cir.setReturnValue(Optional.empty());
         }
     }
 }

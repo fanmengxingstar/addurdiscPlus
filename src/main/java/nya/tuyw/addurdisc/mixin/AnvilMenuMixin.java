@@ -1,5 +1,8 @@
 package nya.tuyw.addurdisc.mixin;
 
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.network.chat.Component;
+import net.minecraft.util.StringUtil;
 import net.minecraft.world.Container;
 import net.minecraft.world.inventory.AnvilMenu;
 import net.minecraft.world.inventory.DataSlot;
@@ -20,6 +23,7 @@ public abstract class AnvilMenuMixin extends ItemCombinerMenu {
     @Shadow @Final private DataSlot cost;
     @Shadow private int repairItemCountCost;
     @Shadow private boolean onlyRenaming;
+    @Shadow private String itemName;
 
     private AnvilMenuMixin() {
         super(null, 0, null, null, null);
@@ -42,6 +46,11 @@ public abstract class AnvilMenuMixin extends ItemCombinerMenu {
 
         ItemStack output = blank.copy();
         output.set(ModInitialize.DISC_SONG, song);
+        if (StringUtil.isBlank(this.itemName)) {
+            output.remove(DataComponents.CUSTOM_NAME);
+        } else if (!this.itemName.equals(blank.getHoverName().getString())) {
+            output.set(DataComponents.CUSTOM_NAME, Component.literal(this.itemName));
+        }
         this.resultSlots.setItem(0, output);
         this.cost.set(1);
         this.repairItemCountCost = 0;

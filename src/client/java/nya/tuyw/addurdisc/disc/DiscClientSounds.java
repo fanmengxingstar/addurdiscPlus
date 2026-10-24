@@ -1,59 +1,82 @@
 package nya.tuyw.addurdisc.disc;
 
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.resources.sounds.SimpleSoundInstance;
-import net.minecraft.client.resources.sounds.SoundInstance;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLevelEvents;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.sounds.SoundEngine;
 import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
-import net.minecraft.server.packs.resources.PreparableReloadListener;
-import net.minecraft.sounds.SoundEvent;
-import net.minecraft.world.phys.Vec3;
 import nya.tuyw.addurdisc.AddurDisc;
 import nya.tuyw.addurdisc.disc.net.DiscClientNetwork;
 import nya.tuyw.addurdisc.disc.store.SongStore;
 import nya.tuyw.addurdisc.init.DiscResources;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
 
 /**
  * Plays the tracks that were imported during this session on the client.
  *
- * <p>These are heard by sound name rather than by a registry entry, which is what lets a track work
- * the moment it lands in the sounds folder. The name still has to mean something to the sound engine,
- * and a track that arrived after the game read its sounds does not until the generated pack is re-read
- * here. A track that is not on this computer yet is fetched and played as soon as it is.</p>
+ * <p>Each instance supplies its streamed sound directly, so a newly downloaded track can play without
+ * restarting the sound engine. A track that is not on this computer yet is fetched and then starts at
+ * the jukebox's current position rather than at the beginning.</p>
  */
 public final class DiscClientSounds {
     /**
      * The instance, not just the name, because stopping by name and category stops every jukebox
      * playing that track rather than only the one that went quiet.
      */
-    private static final Map<BlockPos, SoundInstance> PLAYING = new HashMap<>();
+    private static final Map<BlockPos, ImportedDiscSoundInstance> PLAYING = new HashMap<>();
     /** Jukeboxes whose song was announced before this side could hear it. */
-    private static final Map<BlockPos, Identifier> WAITING = new HashMap<>();
+    private static final Map<BlockPos, PendingSong> WAITING = new HashMap<>();
+    private static boolean registered;
+
+    public static void register() {
+        if (registered) {
+            return;
+        }
+        registered = true;
+        ClientLevelEvents.AFTER_CLIENT_LEVEL_CHANGE.register((client, level) -> clear());
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            SoundManager manager = client.getSoundManager();
+            PLAYING.values().removeIf(instance -> {
+                if (manager.isActive(instance)) {
+                    return false;
+                }
+                instance.cancelStream();
+                return true;
+            });
+        });
+    }
 
     public static void play(Identifier sound, BlockPos pos) {
+        play(sound, pos, 0L);
+    }
+
+    public static void play(Identifier sound, BlockPos pos, long elapsedTicks) {
+        playAt(sound, pos, elapsedTicks, System.nanoTime());
+    }
+
+    private static void playAt(Identifier sound, BlockPos pos, long elapsedTicks, long announcedAtNanos) {
         stop(pos);
-        SoundManager manager = Minecraft.getInstance().getSoundManager();
-        if (manager.getSoundEvent(sound) == null) {
-            // A track that arrived after the game read its sounds is a name the engine does not know,
-            // and the pack describing it can be behind the file it is meant to list.
-            DiscResources.refresh();
-            reloadSoundDefinitions();
-            if (manager.getSoundEvent(sound) == null) {
-                await(sound, pos);
-                return;
-            }
+        if (!AddurDisc.MODID.equals(sound.getNamespace()) || !DiscResources.isValidName(sound.getPath())) {
+            return;
         }
-        SoundEvent event = SoundEvent.createVariableRangeEvent(sound);
-        SoundInstance instance = SimpleSoundInstance.forJukeboxSong(event, Vec3.atCenterOf(pos));
+        SoundManager manager = Minecraft.getInstance().getSoundManager();
+        Path source = SongStore.resolve(sound.getPath());
+        if (!DiscClientNetwork.isReady(sound.getPath()) || source == null || !Files.isRegularFile(source)) {
+            WAITING.put(pos.immutable(), new PendingSong(sound, elapsedTicks, announcedAtNanos));
+            DiscClientNetwork.request(sound.getPath());
+            return;
+        }
+        ImportedDiscSoundInstance instance =
+                new ImportedDiscSoundInstance(sound, pos, source, elapsedTicks, announcedAtNanos);
         SoundEngine.PlayResult result = manager.play(instance);
         if (result == SoundEngine.PlayResult.NOT_STARTED) {
+            instance.cancelStream();
             AddurDisc.LOGGER.warn("The track {} could not be started on this client.", sound);
             return;
         }
@@ -64,55 +87,37 @@ public final class DiscClientSounds {
         PLAYING.put(pos.immutable(), instance);
     }
 
-    /**
-     * Re-reads the sound definitions of the generated pack, which is the sound half of a resource
-     * reload without the loading screen a whole one costs. Both halves run on the calling thread, so
-     * the tracks that were just written are known the moment this returns. That is a deliberate
-     * trade-off: the cost is logged, because on a large instance it is visible as a stutter.
-     */
-    public static void reloadSoundDefinitions() {
-        Minecraft client = Minecraft.getInstance();
-        long startNanos = System.nanoTime();
-        Executor inline = command -> command.run();
-        client.getSoundManager()
-                .reload(new PreparableReloadListener.SharedState(client.getResourceManager()),
-                        inline, CompletableFuture::completedFuture, inline)
-                .join();
-        AddurDisc.LOGGER.debug("Reloaded the sound definitions in {} ms.",
-                (System.nanoTime() - startNanos) / 1_000_000L);
-    }
-
-    /** Remembers the jukebox and pulls the track, so stopping the disc also drops the pending play. */
-    private static void await(Identifier sound, BlockPos pos) {
-        if (!SongStore.exists(sound.getPath())) {
-            WAITING.put(pos.immutable(), sound);
-            DiscClientNetwork.request(sound.getPath());
-            return;
-        }
-        AddurDisc.LOGGER.warn("The track {} is on disk but the sound engine still cannot name it.", sound);
-    }
-
     /** Starts the songs that were announced before their track arrived, once a sync has landed. */
     public static void playWaiting() {
-        for (Map.Entry<BlockPos, Identifier> waiting : Map.copyOf(WAITING).entrySet()) {
-            if (SongStore.exists(waiting.getValue().getPath())) {
-                play(waiting.getValue(), waiting.getKey());
+        for (Map.Entry<BlockPos, PendingSong> waiting : Map.copyOf(WAITING).entrySet()) {
+            PendingSong pending = waiting.getValue();
+            if (DiscClientNetwork.isReady(pending.sound().getPath())) {
+                playAt(pending.sound(), waiting.getKey(), pending.elapsedTicks(), pending.announcedAtNanos());
             }
         }
     }
 
     public static void stop(BlockPos pos) {
         WAITING.remove(pos.immutable());
-        SoundInstance instance = PLAYING.remove(pos.immutable());
+        ImportedDiscSoundInstance instance = PLAYING.remove(pos.immutable());
         if (instance != null) {
+            instance.cancelStream();
             Minecraft.getInstance().getSoundManager().stop(instance);
         }
     }
 
     /** Forgets the jukeboxes being tracked, which is what leaving a world means for these maps. */
     public static void clear() {
+        SoundManager manager = Minecraft.getInstance().getSoundManager();
+        for (ImportedDiscSoundInstance instance : PLAYING.values()) {
+            instance.cancelStream();
+            manager.stop(instance);
+        }
         PLAYING.clear();
         WAITING.clear();
+    }
+
+    private record PendingSong(Identifier sound, long elapsedTicks, long announcedAtNanos) {
     }
 
     private DiscClientSounds() {

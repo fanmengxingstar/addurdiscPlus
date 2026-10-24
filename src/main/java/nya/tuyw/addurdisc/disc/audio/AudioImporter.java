@@ -111,6 +111,7 @@ public final class AudioImporter {
         }
         Path log = output.resolveSibling(output.getFileName() + ".log");
         try {
+            long maxSongBytes = ConfigUtil.getMaxSongBytes();
             ProcessBuilder builder = new ProcessBuilder(
                     executable.toString(),
                     "-hide_banner",
@@ -122,6 +123,9 @@ public final class AudioImporter {
                     "-vn", "-map", "0:a:0",
                     "-ac", "1",
                     "-c:a", "libvorbis", "-q:a", VORBIS_QUALITY,
+                    // ffmpeg may finish successfully after reaching -fs. Set it above the quota,
+                    // then reject that result below so a shortened track can never be imported.
+                    "-fs", Long.toString(maxSongBytes + 1L),
                     output.toAbsolutePath().toString());
             builder.redirectError(ProcessBuilder.Redirect.to(log.toFile()));
             builder.redirectOutput(ProcessBuilder.Redirect.DISCARD);
@@ -139,15 +143,15 @@ public final class AudioImporter {
             if (process.exitValue() != 0) {
                 throw new ImportFailedException(describeFailure(source, log, process.exitValue()));
             }
-            byte[] ogg = Files.readAllBytes(output);
-            if (ogg.length == 0) {
+            long outputBytes = Files.size(output);
+            if (outputBytes == 0) {
                 throw new ImportFailedException("ffmpeg produced no audio for " + source.getFileName() + ".");
             }
-            long maxSongBytes = ConfigUtil.getMaxSongBytes();
-            if (ogg.length > maxSongBytes) {
+            if (outputBytes > maxSongBytes) {
                 throw new ImportFailedException(ImportFailedException.TOO_LARGE_KEY,
-                        tooLarge(ogg.length, maxSongBytes));
+                        tooLarge(outputBytes, maxSongBytes));
             }
+            byte[] ogg = Files.readAllBytes(output);
             AddurDisc.LOGGER.debug("Converted {} to a {} byte mono ogg.", source.getFileName(), ogg.length);
             return ogg;
         } catch (IOException e) {

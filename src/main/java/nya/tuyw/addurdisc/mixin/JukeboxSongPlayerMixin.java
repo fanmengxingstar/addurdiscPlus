@@ -1,63 +1,64 @@
 package nya.tuyw.addurdisc.mixin;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.JukeboxSong;
 import net.minecraft.world.level.LevelAccessor;
-import net.minecraft.world.phys.AABB;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.world.level.block.state.BlockState;
 import nya.tuyw.addurdisc.AddurDisc;
-import nya.tuyw.addurdisc.disc.DiscProtocol;
-import nya.tuyw.addurdisc.disc.net.DiscPayloads.PlaySong;
+import nya.tuyw.addurdisc.disc.net.DiscPlayback;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/**
- * Tells nearby clients to play a song that vanilla cannot name.
- *
- * <p>Vanilla announces a playback as an index into the {@code jukebox_song} datapack registry, which
- * every client resolves from the copy it was sent at login. A disc imported during a session has no
- * such index, so its playback has to be announced by sound name instead, and clients that have the
- * file will find it through their own resource pack.</p>
- */
+/** Announces runtime songs and keeps their listeners in sync with the jukebox lifecycle. */
 @Mixin(net.minecraft.world.item.JukeboxSongPlayer.class)
 public class JukeboxSongPlayerMixin {
-    /**
-     * How far around the jukebox players are told to play. Wider than the track's own carrying
-     * range, which the generated sounds.json pins at {@code DiscProtocol.AUDIBLE_BLOCKS}, so that
-     * someone walking towards a playing jukebox already has the sound and simply fades in.
-     */
-    private static final double ANNOUNCE_RANGE = DiscProtocol.ANNOUNCE_BLOCKS;
-
-    @Shadow
-    @Final
-    private BlockPos blockPos;
+    @Shadow @Final private BlockPos blockPos;
+    @Shadow private Holder<JukeboxSong> song;
+    @Shadow private long ticksSinceSongStarted;
+    @Unique private boolean addurdisc$announced;
 
     @Inject(method = "play", at = @At("TAIL"))
-    private void addurdisc$announceImportedSong(LevelAccessor level, net.minecraft.core.Holder<JukeboxSong> song,
-                                                CallbackInfo ci) {
-        if (!(level instanceof ServerLevel serverLevel)) {
-            return;
+    private void addurdisc$announceImportedSong(LevelAccessor level, Holder<JukeboxSong> song, CallbackInfo ci) {
+        if (level instanceof ServerLevel serverLevel) {
+            // Vanilla play also restarts the same song, so its previous subscription must end.
+            DiscPlayback.stop(serverLevel, this.blockPos);
+            addurdisc$updateListeners(serverLevel, song);
+            this.addurdisc$announced = true;
         }
-        if (serverLevel.registryAccess().lookupOrThrow(Registries.JUKEBOX_SONG).getId(song.value()) >= 0) {
-            return;
+    }
+
+    @Inject(method = "tick", at = @At("TAIL"))
+    private void addurdisc$syncListeners(LevelAccessor level, BlockState state, CallbackInfo ci) {
+        if (level instanceof ServerLevel serverLevel && this.song != null
+                && (!this.addurdisc$announced || this.ticksSinceSongStarted % 20 == 0)) {
+            addurdisc$updateListeners(serverLevel, this.song);
+            this.addurdisc$announced = true;
         }
+    }
+
+    @Inject(method = "stop", at = @At("HEAD"))
+    private void addurdisc$stopListeners(LevelAccessor level, BlockState state, CallbackInfo ci) {
+        if (level instanceof ServerLevel serverLevel) {
+            DiscPlayback.stop(serverLevel, this.blockPos);
+            this.addurdisc$announced = false;
+        }
+    }
+
+    @Unique
+    private void addurdisc$updateListeners(ServerLevel level, Holder<JukeboxSong> song) {
         Identifier sound = song.value().soundEvent().value().location();
-        if (!AddurDisc.MODID.equals(sound.getNamespace())) {
-            return;
-        }
-        for (ServerPlayer player : serverLevel.getEntitiesOfClass(ServerPlayer.class,
-                new AABB(this.blockPos).inflate(ANNOUNCE_RANGE))) {
-            if (ServerPlayNetworking.canSend(player, PlaySong.TYPE)) {
-                ServerPlayNetworking.send(player, new PlaySong(sound, this.blockPos));
-            }
+        if (AddurDisc.MODID.equals(sound.getNamespace())
+                && level.registryAccess().lookupOrThrow(Registries.JUKEBOX_SONG).getId(song.value()) < 0) {
+            DiscPlayback.update(level, this.blockPos, sound, this.ticksSinceSongStarted);
         }
     }
 }
