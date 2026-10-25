@@ -78,3 +78,7 @@
 ## 主 agent 独立复核（2026-10-24）
 
 主 agent 已读组件绑定访问和注册代码，并在每个目标独立运行typed payload真实消息/分页/字符串/分片分配边界回归，以及Fabric隔离服务器回归。全部通过：blank/hopper/bound/vanilla/play/tick/stop/removal/anvil，含组件持久化往返、237tick进度恢复、动态时长、复制后保留原片及一级经验。三个公共Mixin实际加载并正常关闭。
+
+## 2026-10-25 手部枚举边界复核
+
+新增真实payload回归先证实非法手值2、255会被误认为副手；解码改为仅接受0/1，其余抛DecoderException。合法主手/副手的编码字节保持不变。两版完整构建与真实网络回归均通过，主agent独立复跑也通过。修改仅DiscPayloads.java、PayloadNetworkRegression.java和本记录；保留此前实际服务器行为验证。
