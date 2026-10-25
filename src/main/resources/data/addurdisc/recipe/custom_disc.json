@@ -1,8 +1,12 @@
 {
     "type": "minecraft:crafting_shaped",
     "key": {
-        "A": "minecraft:amethyst_shard",
-        "R": "minecraft:redstone"
+        "A": {
+            "item": "minecraft:amethyst_shard"
+        },
+        "R": {
+            "item": "minecraft:redstone"
+        }
     },
     "pattern": [
         "AAA",

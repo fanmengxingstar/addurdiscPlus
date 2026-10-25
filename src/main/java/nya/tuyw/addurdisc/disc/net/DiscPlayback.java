@@ -3,7 +3,7 @@ package nya.tuyw.addurdisc.disc.net;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.game.ClientboundLevelEventPacket;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -25,7 +25,7 @@ public final class DiscPlayback {
     private static final double RANGE_SQUARED = (double) DiscProtocol.ANNOUNCE_BLOCKS * DiscProtocol.ANNOUNCE_BLOCKS;
 
     /** Called at playback start, on the first loaded tick, and once per second afterwards. */
-    public static void update(ServerLevel level, BlockPos pos, Identifier sound, long elapsedTicks) {
+    public static void update(ServerLevel level, BlockPos pos, ResourceLocation sound, long elapsedTicks) {
         Jukebox key = new Jukebox(level, pos.immutable());
         Playback playback = PLAYING.get(key);
         if (playback != null && (!playback.sound.equals(sound) || elapsedTicks < playback.elapsedTicks)) {
@@ -52,7 +52,7 @@ public final class DiscPlayback {
             }
             if (ServerPlayNetworking.canSend(player, PlaybackState.TYPE)) {
                 ServerPlayNetworking.send(player, new PlaybackState(sound, key.pos,
-                        level.dimension().identifier(), elapsedTicks));
+                        level.dimension().location(), elapsedTicks));
             } else if (ServerPlayNetworking.canSend(player, PlaySong.TYPE)) {
                 ServerPlayNetworking.send(player, new PlaySong(sound, key.pos));
             } else {
@@ -94,7 +94,7 @@ public final class DiscPlayback {
             return;
         }
         if (ServerPlayNetworking.canSend(player, StopSong.TYPE)) {
-            ServerPlayNetworking.send(player, new StopSong(key.pos, key.level.dimension().identifier()));
+            ServerPlayNetworking.send(player, new StopSong(key.pos, key.level.dimension().location()));
         } else if (player.level() == key.level && ServerPlayNetworking.canSend(player, PlaySong.TYPE)) {
             // Legacy clients already stop imported tracks on vanilla event 1011. Sending directly
             // reaches listeners outside its usual radius without affecting another dimension.
@@ -105,11 +105,11 @@ public final class DiscPlayback {
     private record Jukebox(ServerLevel level, BlockPos pos) { }
 
     private static final class Playback {
-        private final Identifier sound;
+        private final ResourceLocation sound;
         private final Set<ServerPlayer> listeners = new HashSet<>();
         private long elapsedTicks;
 
-        private Playback(Identifier sound) {
+        private Playback(ResourceLocation sound) {
             this.sound = sound;
         }
     }

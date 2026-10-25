@@ -108,14 +108,14 @@ public final class DiscClientNetwork {
         ClientPlayNetworking.registerGlobalReceiver(PlaySong.TYPE, DiscClientNetwork::onPlaySong);
         ClientPlayNetworking.registerGlobalReceiver(PlaybackState.TYPE, (payload, context) -> {
             if (context.client().level != null
-                    && context.client().level.dimension().identifier().equals(payload.dimension())
+                    && context.client().level.dimension().location().equals(payload.dimension())
                     && payload.elapsedTicks() >= 0 && payload.elapsedTicks() <= Integer.MAX_VALUE) {
                 DiscClientSounds.play(payload.sound(), payload.pos(), payload.elapsedTicks());
             }
         });
         ClientPlayNetworking.registerGlobalReceiver(StopSong.TYPE, (payload, context) -> {
             if (context.client().level != null
-                    && context.client().level.dimension().identifier().equals(payload.dimension())) {
+                    && context.client().level.dimension().location().equals(payload.dimension())) {
                 DiscClientSounds.stop(payload.pos());
             }
         });
@@ -173,7 +173,7 @@ public final class DiscClientNetwork {
         String suggestedName = TrackMetadata.suggestedName(fileName);
         String title = TrackMetadata.title(fileName);
         String sha1 = SongStore.sha1(sourceBytes);
-        Minecraft.getInstance().executeIfPossible(() -> queueUpload(
+        Minecraft.getInstance().execute(() -> queueUpload(
                 suggestedName, title, sourceBytes, sha1, hand, connection, watched));
     }
 
@@ -231,7 +231,7 @@ public final class DiscClientNetwork {
     private static void tellPlayer(Component message) {
         Minecraft client = Minecraft.getInstance();
         if (client.player != null) {
-            client.gui.chatListener().handleSystemMessage(message, false);
+            client.gui.getChat().addMessage(message);
         }
     }
 
@@ -245,7 +245,7 @@ public final class DiscClientNetwork {
             READY.remove(song.name());
             SYNC.execute(() -> {
                 boolean present = SongStore.hasUpToDate(song);
-                Minecraft.getInstance().executeIfPossible(() -> {
+                Minecraft.getInstance().execute(() -> {
                     if (session != generation || ANNOUNCED.get(song.name()) != song) return;
                     if (present) {
                         READY.add(song.name());
@@ -353,7 +353,7 @@ public final class DiscClientNetwork {
                 failure = "could not be written to disk";
             }
             String reason = failure;
-            Minecraft.getInstance().executeIfPossible(() -> {
+            Minecraft.getInstance().execute(() -> {
                 if (session != generation) return;
                 saving = null;
                 if (reason != null) {

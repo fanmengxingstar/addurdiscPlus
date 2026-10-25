@@ -1,21 +1,18 @@
 package nya.tuyw.addurdisc.init;
 
-import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.sounds.SoundEvent;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.JukeboxPlayable;
-import net.minecraft.world.item.JukeboxSong;
 import net.minecraft.world.item.Rarity;
 import nya.tuyw.addurdisc.AddurDisc;
 import nya.tuyw.addurdisc.disc.CustomDiscItem;
@@ -39,7 +36,7 @@ public final class ModInitialize {
 
     static {
         DiscResources.bootstrap();
-        Identifier componentId = Identifier.fromNamespaceAndPath(AddurDisc.MODID, "disc_song");
+        ResourceLocation componentId = ResourceLocation.fromNamespaceAndPath(AddurDisc.MODID, "disc_song");
         DISC_SONG = Registry.register(BuiltInRegistries.DATA_COMPONENT_TYPE, componentId,
                 DataComponentType.<SongBinding>builder()
                         .persistent(SongBinding.CODEC)
@@ -47,25 +44,19 @@ public final class ModInitialize {
                         .cacheEncoding()
                         .build());
 
-        // Vanilla gates jukebox insertion on the mere presence of DataComponents.JUKEBOX_PLAYABLE
-        // and the item registry is frozen once bootstrapping is over, so the item carries a
-        // placeholder song that JukeboxSongMixin swaps for the imported track. A blank disc shows
-        // the placeholder's description, which is the "right click to add a song" hint. The
-        // placeholder's SoundEvent is never registered and never heard: a blank disc cannot be put
-        // in a jukebox at all, and a bound one resolves through the mixin instead. There is no
-        // silent vanilla sound event to point it at, so it is an unregistered name of our own.
+        // Vanilla gates insertion on JUKEBOX_PLAYABLE being present. EitherHolder requires a
+        // registered jukebox_song key, so retain a valid vanilla holder with its tooltip hidden.
+        // JukeboxSongMixin resolves bound discs to their runtime song and rejects blank ones before
+        // vanilla can insert this placeholder.
         ResourceKey<Item> key = ResourceKey.create(Registries.ITEM,
-                Identifier.fromNamespaceAndPath(AddurDisc.MODID, "custom_disc"));
-        SoundEvent placeholderSound = SoundEvent.createVariableRangeEvent(
-                Identifier.fromNamespaceAndPath(AddurDisc.MODID, "custom_disc_placeholder"));
-        JukeboxSong placeholder = new JukeboxSong(Holder.direct(placeholderSound),
-                Component.translatable("item." + AddurDisc.MODID + ".custom_disc.desc"),
-                0.0F, SongBinding.COMPARATOR_OUTPUT);
+                ResourceLocation.fromNamespaceAndPath(AddurDisc.MODID, "custom_disc"));
         CUSTOM_DISC = Registry.register(BuiltInRegistries.ITEM, key, new CustomDiscItem(new Item.Properties()
-                .setId(key)
                 .stacksTo(1)
                 .rarity(Rarity.RARE)
-                .component(DataComponents.JUKEBOX_PLAYABLE, new JukeboxPlayable(Holder.direct(placeholder)))));
+                // The 1.21.1 tooltip provider cannot inspect the owning stack. Hide its placeholder
+                // line here and let CustomDiscItem show the same hint only while the disc is blank.
+                .component(DataComponents.JUKEBOX_PLAYABLE, Items.MUSIC_DISC_13.getDefaultInstance()
+                        .get(DataComponents.JUKEBOX_PLAYABLE).withTooltip(false))));
 
         CreativeModeTab tab = CreativeModeTab.builder(CreativeModeTab.Row.TOP, 0)
                 .icon(() -> new ItemStack(Items.JUKEBOX))
@@ -73,7 +64,7 @@ public final class ModInitialize {
                 .displayItems((params, output) -> output.accept(CUSTOM_DISC))
                 .build();
         Registry.register(BuiltInRegistries.CREATIVE_MODE_TAB,
-                Identifier.fromNamespaceAndPath(AddurDisc.MODID, "addurdisc_creativetab"), tab);
+                ResourceLocation.fromNamespaceAndPath(AddurDisc.MODID, "addurdisc_creativetab"), tab);
     }
 
     /** Forces the registration above, which the mod entrypoint calls before anything else. */

@@ -1,13 +1,13 @@
 package nya.tuyw.addurdisc.disc.ui;
 
 import net.minecraft.ChatFormatting;
-import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.PlainTextButton;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.CommonColors;
-import net.minecraft.util.Util;
+import net.minecraft.Util;
 import net.minecraft.world.InteractionHand;
 import nya.tuyw.addurdisc.AddurDisc;
 import nya.tuyw.addurdisc.disc.audio.ImportFailedException;
@@ -22,7 +22,7 @@ import java.util.concurrent.CompletableFuture;
  * their selection for server-side conversion through {@link DiscClientNetwork}.
  *
  * <p>The chooser is asynchronous; file reading and hashing run on the shared io pool and report back
- * through {@link net.minecraft.client.Minecraft#executeIfPossible}. The layout follows the same idea
+ * through {@link net.minecraft.client.Minecraft#execute}. The layout follows the same idea
  * as camerapture's upload screen: a title, one line of status, an underlined browse link, and the
  * whole window accepting a dropped file.</p>
  */
@@ -73,12 +73,12 @@ public class MusicPickerScreen extends Screen implements DiscClientNetwork.Impor
     }
 
     @Override
-    public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
-        super.extractRenderState(graphics, mouseX, mouseY, delta);
-        graphics.centeredText(font, this.title, width / 2, height / 2 - font.lineHeight * 2 - 14, CommonColors.WHITE);
-        graphics.centeredText(font, message, width / 2, height / 2 - font.lineHeight - 4,
+    public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
+        super.render(graphics, mouseX, mouseY, delta);
+        graphics.drawCenteredString(font, this.title, width / 2, height / 2 - font.lineHeight * 2 - 14, CommonColors.WHITE);
+        graphics.drawCenteredString(font, message, width / 2, height / 2 - font.lineHeight - 4,
                 failed ? CommonColors.RED : CommonColors.WHITE);
-        graphics.centeredText(font, Component.translatable("addurdisc.screen.supported"),
+        graphics.drawCenteredString(font, Component.translatable("addurdisc.screen.supported"),
                 width / 2, height / 2 + font.lineHeight * 3 + 8, CommonColors.GRAY);
     }
 
@@ -163,7 +163,7 @@ public class MusicPickerScreen extends Screen implements DiscClientNetwork.Impor
 
     /** Applies a result that arrived off the client thread, once that thread picks it up. */
     private void finish(Component message, boolean failed) {
-        minecraft.executeIfPossible(() -> {
+        minecraft.execute(() -> {
             busy = false;
             show(message, failed);
         });
