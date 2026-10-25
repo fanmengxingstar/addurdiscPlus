@@ -41,9 +41,38 @@ public final class PayloadNetworkRegression {
         throw new AssertionError(message);
     }
 
+    private static void verifyHandBounds(UUID id, String hash) {
+        for (InteractionHand hand : InteractionHand.values()) {
+            RegistryFriendlyByteBuf encoded = new RegistryFriendlyByteBuf(Unpooled.buffer(), RegistryAccess.EMPTY);
+            try {
+                UploadStart.STREAM_CODEC.encode(encoded, new UploadStart(id, "track", "", 1, hash, hand));
+                check(encoded.getUnsignedByte(encoded.writerIndex() - 1) == hand.ordinal(),
+                        "legal hand wire value changed: " + hand);
+                check(UploadStart.STREAM_CODEC.decode(encoded).hand() == hand,
+                        "legal hand failed to decode: " + hand);
+            } finally { encoded.release(); }
+        }
+        List<Integer> accepted = new ArrayList<>();
+        for (int hand : new int[]{2, 255}) {
+            RegistryFriendlyByteBuf malformed = new RegistryFriendlyByteBuf(Unpooled.buffer(), RegistryAccess.EMPTY);
+            try {
+                UploadStart.STREAM_CODEC.encode(malformed,
+                        new UploadStart(id, "track", "", 1, hash, InteractionHand.MAIN_HAND));
+                // Change only the final hand byte of an otherwise valid production payload.
+                malformed.setByte(malformed.writerIndex() - 1, hand);
+                try {
+                    UploadStart.STREAM_CODEC.decode(malformed);
+                    accepted.add(hand);
+                } catch (io.netty.handler.codec.DecoderException expected) { }
+            } finally { malformed.release(); }
+        }
+        check(accepted.isEmpty(), "invalid hand ids accepted: " + accepted);
+    }
+
     public static void main(String[] args) {
         UUID id = UUID.randomUUID();
         String hash = "0123456789abcdef0123456789abcdef01234567";
+        verifyHandBounds(id, hash);
         ResourceLocation sound = new ResourceLocation("addurdisc", "track");
         ResourceLocation dimension = new ResourceLocation("minecraft", "overworld");
         BlockPos pos = new BlockPos(-12, 80, 42);
@@ -79,6 +108,6 @@ public final class PayloadNetworkRegression {
                     new UploadStart(id, "track", "a".repeat(129), 1, hash, InteractionHand.MAIN_HAND)),
                     "title character limit ignored");
         } finally { malformed.release(); }
-        System.out.println("PASS typed payloads: all messages, pages, string and allocation bounds");
+        System.out.println("PASS typed payloads: all messages, pages, string, allocation and hand enum bounds");
     }
 }

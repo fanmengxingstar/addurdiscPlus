@@ -1,6 +1,7 @@
 package nya.tuyw.addurdisc.disc.net;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.handler.codec.DecoderException;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -31,7 +32,11 @@ public final class DiscPayloads {
     }
 
     private static final StreamCodec<ByteBuf, InteractionHand> INTERACTION_HAND_CODEC = ByteBufCodecs.BYTE.map(
-            id -> id == 0 ? InteractionHand.MAIN_HAND : InteractionHand.OFF_HAND,
+            id -> {
+                if (id == 0) return InteractionHand.MAIN_HAND;
+                if (id == 1) return InteractionHand.OFF_HAND;
+                throw new DecoderException("Invalid interaction hand: " + (id & 0xFF));
+            },
             hand -> (byte) hand.ordinal());
 
     /** Why a transfer stopped. What the player reads is picked from this, never taken from the wire. */
