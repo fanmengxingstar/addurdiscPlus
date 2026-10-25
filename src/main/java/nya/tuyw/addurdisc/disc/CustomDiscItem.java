@@ -2,12 +2,15 @@ package nya.tuyw.addurdisc.disc;
 
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
-import net.minecraft.world.InteractionResult;
+import net.minecraft.world.InteractionResultHolder;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.TooltipFlag;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.level.Level;
 import nya.tuyw.addurdisc.init.ModInitialize;
+
+import java.util.List;
 
 /**
  * The disc the player crafts and imports music into.
@@ -29,11 +32,23 @@ public class CustomDiscItem extends Item {
     }
 
     @Override
-    public InteractionResult use(Level level, Player player, InteractionHand hand) {
-        if (!level.isClientSide()) {
-            return InteractionResult.PASS;
+    public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
+        ItemStack stack = player.getItemInHand(hand);
+        if (level.isClientSide()) {
+            DiscPickers.open.accept(player, hand);
+            return InteractionResultHolder.success(stack);
         }
-        DiscPickers.open.accept(player, hand);
-        return InteractionResult.SUCCESS;
+        return InteractionResultHolder.pass(stack);
+    }
+
+    @Override
+    public void appendHoverText(ItemStack stack, Item.TooltipContext context, List<Component> tooltip,
+                                TooltipFlag flag) {
+        super.appendHoverText(stack, context, tooltip, flag);
+        SongBinding binding = stack.get(ModInitialize.DISC_SONG);
+        if (binding == null || !binding.isBound()) {
+            tooltip.add(Component.translatable("item." + nya.tuyw.addurdisc.AddurDisc.MODID
+                    + ".custom_disc.desc"));
+        }
     }
 }

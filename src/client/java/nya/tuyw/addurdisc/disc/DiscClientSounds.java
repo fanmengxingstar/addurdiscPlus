@@ -1,12 +1,11 @@
 package nya.tuyw.addurdisc.disc;
 
 import net.minecraft.client.Minecraft;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLevelEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.minecraft.client.sounds.SoundEngine;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.core.BlockPos;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import nya.tuyw.addurdisc.AddurDisc;
 import nya.tuyw.addurdisc.disc.net.DiscClientNetwork;
 import nya.tuyw.addurdisc.disc.store.SongStore;
@@ -32,6 +31,7 @@ public final class DiscClientSounds {
     private static final Map<BlockPos, ImportedDiscSoundInstance> PLAYING = new HashMap<>();
     /** Jukeboxes whose song was announced before this side could hear it. */
     private static final Map<BlockPos, PendingSong> WAITING = new HashMap<>();
+    private static ClientLevel trackedLevel;
     private static boolean registered;
 
     public static void register() {
@@ -39,8 +39,12 @@ public final class DiscClientSounds {
             return;
         }
         registered = true;
-        ClientLevelEvents.AFTER_CLIENT_LEVEL_CHANGE.register((client, level) -> clear());
+        trackedLevel = Minecraft.getInstance().level;
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            if (client.level != trackedLevel) {
+                clear();
+                trackedLevel = client.level;
+            }
             SoundManager manager = client.getSoundManager();
             PLAYING.values().removeIf(instance -> {
                 if (manager.isActive(instance)) {
@@ -52,15 +56,15 @@ public final class DiscClientSounds {
         });
     }
 
-    public static void play(Identifier sound, BlockPos pos) {
+    public static void play(ResourceLocation sound, BlockPos pos) {
         play(sound, pos, 0L);
     }
 
-    public static void play(Identifier sound, BlockPos pos, long elapsedTicks) {
+    public static void play(ResourceLocation sound, BlockPos pos, long elapsedTicks) {
         playAt(sound, pos, elapsedTicks, System.nanoTime());
     }
 
-    private static void playAt(Identifier sound, BlockPos pos, long elapsedTicks, long announcedAtNanos) {
+    private static void playAt(ResourceLocation sound, BlockPos pos, long elapsedTicks, long announcedAtNanos) {
         stop(pos);
         if (!AddurDisc.MODID.equals(sound.getNamespace()) || !DiscResources.isValidName(sound.getPath())) {
             return;
@@ -74,16 +78,7 @@ public final class DiscClientSounds {
         }
         ImportedDiscSoundInstance instance =
                 new ImportedDiscSoundInstance(sound, pos, source, elapsedTicks, announcedAtNanos);
-        SoundEngine.PlayResult result = manager.play(instance);
-        if (result == SoundEngine.PlayResult.NOT_STARTED) {
-            instance.cancelStream();
-            AddurDisc.LOGGER.warn("The track {} could not be started on this client.", sound);
-            return;
-        }
-        if (result == SoundEngine.PlayResult.STARTED_SILENTLY) {
-            // The track is playing, just under a category this player has turned down.
-            AddurDisc.LOGGER.warn("The track {} started on a silenced sound category.", sound);
-        }
+        manager.play(instance);
         PLAYING.put(pos.immutable(), instance);
     }
 
@@ -117,7 +112,7 @@ public final class DiscClientSounds {
         WAITING.clear();
     }
 
-    private record PendingSong(Identifier sound, long elapsedTicks, long announcedAtNanos) {
+    private record PendingSong(ResourceLocation sound, long elapsedTicks, long announcedAtNanos) {
     }
 
     private DiscClientSounds() {

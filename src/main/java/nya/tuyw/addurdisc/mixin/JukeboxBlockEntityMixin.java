@@ -1,18 +1,15 @@
 package nya.tuyw.addurdisc.mixin;
 
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.entity.JukeboxBlockEntity;
 import nya.tuyw.addurdisc.disc.SongBinding;
-import nya.tuyw.addurdisc.disc.net.DiscPlayback;
 import nya.tuyw.addurdisc.init.ModInitialize;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-/** Applies the same blank-disc rule to hoppers and closes playback on chunk unload. */
+/** Applies the same blank-disc rule to hoppers. */
 @Mixin(JukeboxBlockEntity.class)
 public class JukeboxBlockEntityMixin {
     @Inject(method = "canPlaceItem", at = @At("HEAD"), cancellable = true)
@@ -25,11 +22,4 @@ public class JukeboxBlockEntityMixin {
         }
     }
 
-    @Inject(method = "setRemoved", at = @At("HEAD"))
-    private void addurdisc$stopOnRemoval(CallbackInfo ci) {
-        JukeboxBlockEntity jukebox = (JukeboxBlockEntity) (Object) this;
-        if (jukebox.getLevel() instanceof ServerLevel level) {
-            DiscPlayback.stop(level, jukebox.getBlockPos());
-        }
-    }
 }

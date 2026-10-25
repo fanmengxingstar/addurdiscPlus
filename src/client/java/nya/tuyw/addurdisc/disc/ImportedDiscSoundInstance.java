@@ -9,10 +9,10 @@ import net.minecraft.client.sounds.JOrbisAudioStream;
 import net.minecraft.client.sounds.SoundBufferLibrary;
 import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.client.sounds.WeighedSoundEvents;
+import net.minecraft.Util;
 import net.minecraft.core.BlockPos;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundSource;
-import net.minecraft.util.Util;
 import net.minecraft.util.valueproviders.ConstantFloat;
 import net.minecraft.world.phys.Vec3;
 import nya.tuyw.addurdisc.AddurDisc;
@@ -33,12 +33,13 @@ final class ImportedDiscSoundInstance extends AbstractSoundInstance {
     private static final int MAX_CATCH_UP_PASSES = 3;
 
     private final Path source;
+    private final WeighedSoundEvents importedEvent;
     private final long elapsedNanos;
     private final long announcedAtNanos;
     private volatile boolean cancelled;
     private AudioStream openedStream;
 
-    ImportedDiscSoundInstance(Identifier id, BlockPos pos, Path source, long elapsedTicks, long announcedAtNanos) {
+    ImportedDiscSoundInstance(ResourceLocation id, BlockPos pos, Path source, long elapsedTicks, long announcedAtNanos) {
         super(id, SoundSource.RECORDS, SoundInstance.createUnseededRandom());
         this.source = source;
         this.elapsedNanos = Math.clamp(elapsedTicks, 0L, MAX_ELAPSED_TICKS) * TICK_NANOS;
@@ -50,18 +51,18 @@ final class ImportedDiscSoundInstance extends AbstractSoundInstance {
         volume = 4.0F;
         sound = new Sound(id, ConstantFloat.of(1.0F), ConstantFloat.of(1.0F), 1,
                 Sound.Type.FILE, true, false, DiscProtocol.AUDIBLE_BLOCKS);
-        soundEvent = new WeighedSoundEvents(id, null);
-        soundEvent.addSound(sound);
+        importedEvent = new WeighedSoundEvents(id, null);
+        importedEvent.addSound(sound);
     }
 
     @Override
-    public WeighedSoundEvents getOrResolve(SoundManager manager) {
-        return soundEvent;
+    public WeighedSoundEvents resolve(SoundManager manager) {
+        return importedEvent;
     }
 
     /** Fabric routes streamed instances through this hook before consulting vanilla's file cache. */
     @Override
-    public CompletableFuture<AudioStream> getAudioStream(SoundBufferLibrary library, Identifier id, boolean loop) {
+    public CompletableFuture<AudioStream> getAudioStream(SoundBufferLibrary library, ResourceLocation id, boolean loop) {
         return CompletableFuture.supplyAsync(() -> {
             checkCancelled();
             try {

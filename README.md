@@ -22,7 +22,7 @@ Taking the result costs one experience level and leaves the original disc in the
 
 ## 前置要求 / Requirements
 
-- Minecraft **26.3** · Fabric Loader ≥ 0.19.5 · Fabric API **0.161.0+26.3** · Java ≥ 25
+- Minecraft **1.21.1** · Fabric Loader ≥ 0.16.14 · Fabric API **0.116.17+1.21.1** · Java ≥ 21
 - **服务器需要 ffmpeg**：放在服务器进程的 `PATH` 里（名字为 `ffmpeg`），或在
   `config/AddurDisc-common.json` 中把 `ffmpegPath` 设为服务器上可执行文件的完整路径。
   ffmpeg 不随模组分发。客户端无需安装 ffmpeg；纯客户端或仅播放端也不需要转换器。
@@ -55,7 +55,7 @@ Taking the result costs one experience level and leaves the original disc in the
 ./gradlew build
 ```
 
-产物在 `build/libs/AddurDisc-Fabric-26.3-<版本>.jar`（`build` 只生成 jar，无需 remap）。
+产物在 `build/libs/AddurDisc-Fabric-1.21.1-<版本>.jar`（Loom 会通过 `remapJar` 生成可发布的混淆名 jar）。
 
 ## 许可证
 
