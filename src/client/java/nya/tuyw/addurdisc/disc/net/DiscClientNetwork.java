@@ -108,14 +108,14 @@ public final class DiscClientNetwork {
         ClientPlayNetworking.registerGlobalReceiver(PlaySong.TYPE, DiscClientNetwork::onPlaySong);
         ClientPlayNetworking.registerGlobalReceiver(PlaybackState.TYPE, (payload, context) -> {
             if (context.client().level != null
-                    && context.client().level.dimension().identifier().equals(payload.dimension())
+                    && context.client().level.dimension().location().equals(payload.dimension())
                     && payload.elapsedTicks() >= 0 && payload.elapsedTicks() <= Integer.MAX_VALUE) {
                 DiscClientSounds.play(payload.sound(), payload.pos(), payload.elapsedTicks());
             }
         });
         ClientPlayNetworking.registerGlobalReceiver(StopSong.TYPE, (payload, context) -> {
             if (context.client().level != null
-                    && context.client().level.dimension().identifier().equals(payload.dimension())) {
+                    && context.client().level.dimension().location().equals(payload.dimension())) {
                 DiscClientSounds.stop(payload.pos());
             }
         });
@@ -231,7 +231,7 @@ public final class DiscClientNetwork {
     private static void tellPlayer(Component message) {
         Minecraft client = Minecraft.getInstance();
         if (client.player != null) {
-            client.gui.chatListener().handleSystemMessage(message, false);
+            client.getChatListener().handleSystemMessage(message, false);
         }
     }
 

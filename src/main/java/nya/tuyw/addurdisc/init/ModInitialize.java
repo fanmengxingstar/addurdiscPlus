@@ -7,7 +7,7 @@ import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.world.item.CreativeModeTab;
@@ -39,7 +39,7 @@ public final class ModInitialize {
 
     static {
         DiscResources.bootstrap();
-        Identifier componentId = Identifier.fromNamespaceAndPath(AddurDisc.MODID, "disc_song");
+        ResourceLocation componentId = ResourceLocation.fromNamespaceAndPath(AddurDisc.MODID, "disc_song");
         DISC_SONG = Registry.register(BuiltInRegistries.DATA_COMPONENT_TYPE, componentId,
                 DataComponentType.<SongBinding>builder()
                         .persistent(SongBinding.CODEC)
@@ -55,9 +55,9 @@ public final class ModInitialize {
         // in a jukebox at all, and a bound one resolves through the mixin instead. There is no
         // silent vanilla sound event to point it at, so it is an unregistered name of our own.
         ResourceKey<Item> key = ResourceKey.create(Registries.ITEM,
-                Identifier.fromNamespaceAndPath(AddurDisc.MODID, "custom_disc"));
+                ResourceLocation.fromNamespaceAndPath(AddurDisc.MODID, "custom_disc"));
         SoundEvent placeholderSound = SoundEvent.createVariableRangeEvent(
-                Identifier.fromNamespaceAndPath(AddurDisc.MODID, "custom_disc_placeholder"));
+                ResourceLocation.fromNamespaceAndPath(AddurDisc.MODID, "custom_disc_placeholder"));
         JukeboxSong placeholder = new JukeboxSong(Holder.direct(placeholderSound),
                 Component.translatable("item." + AddurDisc.MODID + ".custom_disc.desc"),
                 0.0F, SongBinding.COMPARATOR_OUTPUT);
@@ -65,7 +65,7 @@ public final class ModInitialize {
                 .setId(key)
                 .stacksTo(1)
                 .rarity(Rarity.RARE)
-                .component(DataComponents.JUKEBOX_PLAYABLE, new JukeboxPlayable(Holder.direct(placeholder)))));
+                .component(DataComponents.JUKEBOX_PLAYABLE, new JukeboxPlayable(new net.minecraft.world.item.EitherHolder<>(Holder.direct(placeholder))))));
 
         CreativeModeTab tab = CreativeModeTab.builder(CreativeModeTab.Row.TOP, 0)
                 .icon(() -> new ItemStack(Items.JUKEBOX))
@@ -73,7 +73,7 @@ public final class ModInitialize {
                 .displayItems((params, output) -> output.accept(CUSTOM_DISC))
                 .build();
         Registry.register(BuiltInRegistries.CREATIVE_MODE_TAB,
-                Identifier.fromNamespaceAndPath(AddurDisc.MODID, "addurdisc_creativetab"), tab);
+                ResourceLocation.fromNamespaceAndPath(AddurDisc.MODID, "addurdisc_creativetab"), tab);
     }
 
     /** Forces the registration above, which the mod entrypoint calls before anything else. */
